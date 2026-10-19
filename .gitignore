@@ -6,3 +6,4 @@ logs/
 teleop_quest/static/wrist_camera.jpg
 *.log
 scratch/
+*.jsonl

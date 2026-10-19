@@ -2,13 +2,14 @@ import asyncio
 import http.server
 import json
 import os
+import queue
 import ssl
 import threading
 import time
 import websockets
 
 class QuestServer:
-    def __init__(self, cert: str, key: str, host: str = "0.0.0.0", http_port: int = 8443, ws_port: int = 8444, ws_port_plain: int = 8445):
+    def __init__(self, cert: str, key: str, host: str = "0.0.0.0", http_port: int = 8443, ws_port: int = 8444, ws_port_plain: int = 8445, record_file: str = None):
         self.cert = cert
         self.key = key
         self.host = host
@@ -16,7 +17,20 @@ class QuestServer:
         self.ws_port = ws_port
         self.ws_port_plain = ws_port_plain
 
-        self._lock = threading.Lock()
+        if record_file is None:
+            record_file = os.environ.get("QUEST_RECORD_FILE", None)
+        if record_file is None:
+            import sys
+            if "--record" in sys.argv:
+                try:
+                    idx = sys.argv.index("--record")
+                    if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("-"):
+                        record_file = sys.argv[idx + 1]
+                except Exception:
+                    pass
+        self.record_file = record_file
+
+        self._lock = threading.RLock()
         self._frame_cond = threading.Condition(self._lock)
         self._running = True
         self._latest_frame = None
@@ -35,6 +49,12 @@ class QuestServer:
         self.static_dir = os.path.join(os.path.dirname(__file__), "static")
         self._cam_file = os.path.join(self.static_dir, "wrist_camera.jpg")
 
+        self._record_queue = queue.Queue() if self.record_file else None
+        self._record_thread = None
+        self._prev_trigger = False
+        self._latest_q0 = None
+        self._q0_provider = None
+
     def start(self):
         # Khởi động HTTPS server (chạy daemon thread)
         http_thread = threading.Thread(target=self._run_http, daemon=True)
@@ -43,6 +63,12 @@ class QuestServer:
         # Khởi động WSS / WS server (chạy daemon thread)
         ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         ws_thread.start()
+
+        # Khởi động luồng ghi log buffer nếu cờ --record được bật
+        if self._record_queue is not None:
+            self._record_thread = threading.Thread(target=self._record_worker, daemon=True)
+            self._record_thread.start()
+            print(f"[Recorder] Đang ghi gói tin thô JSONL vào: {self.record_file}")
 
     def get_frame(self):
         with self._lock:
@@ -152,6 +178,9 @@ class QuestServer:
         }
         if joints is not None:
             msg_dict["joints"] = [round(float(j), 3) for j in joints]
+            with self._lock:
+                if len(joints) > 0:
+                    self._latest_q0 = float(joints[0])
 
         msg_bytes = json.dumps(msg_dict).encode("utf-8")
         with self._lock:
@@ -410,6 +439,8 @@ class QuestServer:
                                         "drive_mode": bool(self._drive_mode)
                                     }
                                     self._latest_telemetry_bytes = json.dumps(self._latest_telemetry_dict).encode("utf-8")
+                        if self._record_queue is not None:
+                            self._record_frame(data)
                     except json.JSONDecodeError:
                         pass
             except (websockets.exceptions.ConnectionClosed, Exception):
@@ -436,9 +467,103 @@ class QuestServer:
             else:
                 print(f"[Quest] WSS Error: {e}")
 
+    def set_q0_provider(self, func):
+        """Đăng ký callback hàm trả về góc quay q0 hiện tại của robot theo thời gian thực."""
+        with self._lock:
+            self._q0_provider = func
+
+    def _record_frame(self, data: dict):
+        if not isinstance(data, dict):
+            return
+        if data.get("type") in ("estop", "ui_state", "go_home", "toggle_gripper"):
+            return
+
+        q0 = None
+        with self._lock:
+            provider = self._q0_provider
+            latest_q0 = self._latest_q0
+        if provider is not None:
+            try:
+                val = provider()
+                if val is not None:
+                    q0 = float(val)
+            except Exception:
+                pass
+        if q0 is None:
+            q0 = latest_q0
+
+        trigger_cur = bool(data.get("trigger", False))
+        event = None
+        if trigger_cur and not self._prev_trigger:
+            event = "trigger_start"
+        elif not trigger_cur and self._prev_trigger:
+            event = "trigger_end"
+        self._prev_trigger = trigger_cur
+
+        record_entry = {
+            "timestamp": data.get("t", time.time()),
+            "pos": data.get("pos"),
+            "quat": data.get("quat"),
+            "head_quat": data.get("head_quat"),
+            "head_pos": data.get("head_pos"),
+            "buttons": {
+                "trigger": trigger_cur,
+                "grip": bool(data.get("grip", False)),
+                "gripper_raw": bool(data.get("gripper_raw", False)),
+                "gripper_btn": bool(data.get("gripper_btn", False)),
+                "button_a": bool(data.get("button_a", False)),
+                "button_b": bool(data.get("button_b", False)),
+                "thumbstick": bool(data.get("thumbstick", False)),
+                "thumbstick_click": bool(data.get("thumbstick_click", False)),
+                "drive_mode": bool(data.get("drive_mode", self._drive_mode))
+            },
+            "trigger": trigger_cur,
+            "grip": bool(data.get("grip", False)),
+            "q0": round(float(q0), 5) if q0 is not None else None,
+            "event": event
+        }
+        try:
+            self._record_queue.put_nowait(record_entry)
+        except Exception:
+            pass
+
+    def _record_worker(self):
+        if not self.record_file:
+            return
+        try:
+            parent_dir = os.path.dirname(self.record_file)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+            with open(self.record_file, "a", buffering=64*1024, encoding="utf-8") as f:
+                while self._running:
+                    try:
+                        item = self._record_queue.get(timeout=0.2)
+                        f.write(json.dumps(item) + "\n")
+                        while not self._record_queue.empty():
+                            try:
+                                it = self._record_queue.get_nowait()
+                                f.write(json.dumps(it) + "\n")
+                            except queue.Empty:
+                                break
+                        f.flush()
+                    except queue.Empty:
+                        pass
+        except Exception as e:
+            print(f"[Recorder Error] Không thể ghi file {self.record_file}: {e}")
+
 if __name__ == "__main__":
     # Test server standalone
+    import argparse
     import sys
+
+    parser = argparse.ArgumentParser(description="Quest Server standalone test")
+    parser.add_argument("--record", type=str, default=None, help="Ghi dữ liệu thô ra file JSONL")
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--http-port", type=int, default=8443)
+    parser.add_argument("--ws-port", type=int, default=8444)
+    parser.add_argument("--ws-port-plain", type=int, default=8445)
+    args = parser.parse_args()
+
     base_dir = os.path.dirname(os.path.dirname(__file__))
     cert_path = os.path.join(base_dir, "certs", "cert.pem")
     key_path = os.path.join(base_dir, "certs", "key.pem")
@@ -447,7 +572,7 @@ if __name__ == "__main__":
         print(f"[Error] Missing cert file at {cert_path}")
         sys.exit(1)
         
-    server = QuestServer(cert_path, key_path)
+    server = QuestServer(cert_path, key_path, host=args.host, http_port=args.http_port, ws_port=args.ws_port, ws_port_plain=args.ws_port_plain, record_file=args.record)
     server.start()
     print("Press Ctrl+C to stop.")
     try:
