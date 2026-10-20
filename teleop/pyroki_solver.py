@@ -115,11 +115,11 @@ class PyrokiIKSolver:
             cost_rest = pk.costs.rest_cost(
                 joint_var=q_var,
                 rest_pose=seed_arr,
-                weight=1.0
+                weight=0.02
             )
             problem = jaxls.LeastSquaresProblem([cost_pose, cost_limit, cost_rest], [q_var]).analyze()
             sol = problem.solve(
-                jaxls.VarValues.make({q_var: seed_arr}),
+                jaxls.VarValues.make([q_var.with_value(seed_arr)]),
                 termination=jaxls.TerminationConfig(
                     max_iterations=25,
                     early_termination=True,
