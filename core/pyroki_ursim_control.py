@@ -1,8 +1,8 @@
 """
-cuRobo v0.8 -> URSim UR3e Controller
+PyRoki -> URSim UR3e Controller
 ======================================
 Pipeline:
-  cuRobo GPU (IK) -> best joint solution -> RTDE servoJ / URScript -> URSim
+  PyRoki CPU (IK) -> best joint solution -> RTDE servoJ / URScript -> URSim
   RTDEReceive (port 30004) -> real-time state monitoring
 """
 
@@ -12,11 +12,8 @@ import socket
 import time
 from typing import Optional
 
-import torch
-
-# -- cuRobo v0.8 API ---------------------------------------------------------
-from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
-from curobo.types import GoalToolPose, Pose, JointState
+# -- PyRoki CPU Kinematics ----------------------------
+from teleop.pyroki_solver import PyrokiIKSolver, normalize_to_current, validate_joints, UR3E_LIMITS
 
 # -- ur-rtde -----------------------------------------------------------------
 import rtde_receive
@@ -45,7 +42,7 @@ IK_RETURN_SEEDS = 5                # Number of IK solutions to evaluate
 UR3E_LIMITS = [
     (-2 * math.pi, 2 * math.pi),  # shoulder_pan_joint   — ±360°
     (-math.pi, 0.25),             # shoulder_lift_joint  — [-180°, ~14°] vươn tự nhiên, chống chúi lật bàn
-    (-2.80, 2.80),                # elbow_joint          — Cho phép gập sâu tự nhiên (-160° đến 160°), CuRobo tự quản lý va chạm
+    (-2.80, 2.80),                # elbow_joint          — Cho phép gập sâu tự nhiên (-160° đến 160°)
     (-2 * math.pi, 2 * math.pi),  # wrist_1_joint        — Cho phép quay tự nhiên tránh đảo nhánh IK gây vặn xoắn
     (-2 * math.pi, 2 * math.pi),  # wrist_2_joint        — Cho phép quay tự nhiên tránh đảo nhánh IK gây vặn xoắn
     (-4 * math.pi, 4 * math.pi),  # wrist_3_joint        — ±720°
@@ -129,6 +126,15 @@ def setup_ursim(timeout: float = 35.0) -> bool:
             if "RUNNING" in mode:
                 # Dừng script cũ đang chạy trên robot để giải phóng thanh ghi RTDE
                 _cmd("stop", 0.2)
+                # Kiểm tra chế độ Remote Control
+                remote = _cmd("is in remote control", 0.3).lower()
+                if "true" not in remote:
+                    print("\n" + "!" * 68)
+                    print("[URSim CẢNH BÁO] Robot CHƯA bật chế độ Remote Control!")
+                    print("-> Hãy mở PolyScope Teach Pendant (noVNC):")
+                    print("   Chọn biểu tượng Robot/Remote Control ở góc trên bên phải màn hình.")
+                    print("   Chuyển từ 'Local' sang 'Remote' để robot có thể nhận lệnh RTDE.")
+                    print("!" * 68 + "\n")
                 s.close()
                 return True
 
@@ -171,9 +177,13 @@ def setup_ursim(timeout: float = 35.0) -> bool:
 def send_urscript(script: str, settle: float = 0.3) -> None:
     """Upload URScript via secondary interface (port 30002). No Remote Control mode needed."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
     s.connect((get_robot_ip(), SECONDARY_PORT))
-    time.sleep(0.2)
-    s.recv(4096)
+    time.sleep(0.1)
+    try:
+        s.recv(4096)
+    except Exception:
+        pass
     s.sendall(script.encode())
     time.sleep(settle)
     s.close()
@@ -185,38 +195,19 @@ def movej_script(q: list, a=JOINT_ACCEL, v=JOINT_SPEED, r=BLEND_RADIUS) -> str:
 
 
 # ===========================================================================
-# cuRobo v0.8 IK Solver
+# PyRoki CPU IK Solver
 # ===========================================================================
 
-class CuRoboIK:
+class PyrokiIK:
     """
-    GPU-accelerated IK using cuRobo v0.8.
-
-    Solves return_seeds solutions in parallel and returns the one requiring
-    the least joint travel from the current robot state.
+    CPU-accelerated IK using PyRoki + JAX.
+    Solves kinematics on CPU, completely independent of NVIDIA GPU/CUDA.
     """
 
-    def __init__(self, num_seeds: int = 64, return_seeds: int = 16, scene_file: Optional[str] = None):
-        print(f"[cuRobo] Initializing IK solver for UR3e (scene: {scene_file})...")
-        if scene_file:
-            scene_path = os.path.abspath(scene_file)
-            self.cfg = InverseKinematicsCfg.create(
-                robot=ROBOT_CONFIG,
-                scene_model=scene_path,
-                num_seeds=num_seeds,
-                position_tolerance=0.008,
-                orientation_tolerance=0.15,
-            )
-        else:
-            self.cfg = InverseKinematicsCfg.create(
-                robot=ROBOT_CONFIG,
-                num_seeds=num_seeds,
-                position_tolerance=0.008,
-                orientation_tolerance=0.15,
-            )
-        self.solver     = InverseKinematics(self.cfg)
-        self.n_seeds    = return_seeds
-        print("[cuRobo] IK solver ready")
+    def __init__(self, scene_file: Optional[str] = None):
+        print("[PyRoki] Khởi tạo bộ giải IK CPU cho UR3e...")
+        self._solver = PyrokiIKSolver()
+        print("[PyRoki] IK solver ready")
 
     def solve(
         self,
@@ -225,87 +216,28 @@ class CuRoboIK:
         current_q: Optional[list] = None,
     ) -> Optional[list]:
         """
-        Solve IK. Returns joint angles [rad]*6 closest to current_q, or None.
-
-        Args:
-            position:   [x, y, z] metres in robot base frame
-            quaternion: [w, x, y, z]
-            current_q:  Current joint angles — used to minimise travel
+        Solve IK using PyRoki. Returns joint angles [rad]*6 closest to current_q, or None.
         """
-        pos_t  = torch.tensor([position],   dtype=torch.float32, device="cuda")
-        quat_t = torch.tensor([quaternion], dtype=torch.float32, device="cuda")
-        goal   = GoalToolPose.from_poses(
-            {TCP_LINK: Pose(position=pos_t, quaternion=quat_t)},
-            num_goalset=1,
-        )
-        
-        # Pass current_state to CuRobo IK so it penalizes branch jumping
-        ref_q = current_q if current_q is not None else [0.0] * 6
-        js = JointState.from_position(
-            torch.tensor([ref_q], dtype=torch.float32, device="cuda")
-        )
-        
-        result = self.solver.solve_pose(goal, current_state=js, return_seeds=self.n_seeds)
-
-        # result.solution: [batch=1, n_seeds, dof=6]
-        # result.success:  [batch=1, n_seeds]
-        sols   = result.solution[0]    # [n_seeds, 6]
-        mask   = result.success[0]     # [n_seeds]
-
-        if not mask.any():
-            return None
-
-        # Pick valid solution with minimum joint travel from current_q (if provided)
-        best, best_dist = None, float("inf")
-        ref_q = current_q if current_q is not None else [0.0] * 6
-        skipped = 0
-
-        for i in range(sols.shape[0]):
-            if not mask[i]:
-                continue
-            raw_q  = sols[i].cpu().tolist()
-            norm_q = normalize_to_current(raw_q, ref_q)
-
-            # Reject solutions outside safe joint limits (prevents protective stops)
-            if not validate_joints(norm_q):
-                skipped += 1
-                continue
-
-            max_diff = max(abs(norm_q[j] - ref_q[j]) for j in range(6))
-            # Ưu tiên các nghiệm cùng nhánh động học liên tục (tránh đảo nhánh vặn xoắn cổ tay)
-            branch_penalty = 20.0 if max_diff > 0.8 else 0.0
-            dist = sum(abs(norm_q[j] - ref_q[j]) for j in range(6)) + branch_penalty
-            if dist < best_dist:
-                best_dist, best = dist, norm_q
-
-        if skipped > 0 and best is None:
-            print(f"[IK] All {skipped} solutions out of safe range — pose unreachable safely")
-
-        return best
+        res = self._solver.solve(pose=(position, quaternion), q_seed=current_q)
+        return res.get("q")
 
 
 # ===========================================================================
 # High-Level Controller
 # ===========================================================================
 
-class CuRoboURSim:
+class PyrokiURSim:
     """
-    cuRobo GPU IK -> URSim via URScript / RTDE.
-
-    Architecture:
-        cuRobo IK  (GPU, returns N seeds)
-             |
-             | pick closest solution to current joints + normalise angles
-             v
-        RTDEControl / URScript -> URSim UR3e
-             |
-        RTDEReceive <- joint state feedback (port 30004)
+    PyRoki CPU IK -> URSim via URScript / RTDE.
+    Hoàn toàn không yêu cầu GPU.
     """
 
-    def __init__(self, scene_file: Optional[str] = None):
-        print("\n" + "=" * 56)
-        print("  cuRobo v0.8 -> URSim Controller")
-        print("=" * 56)
+    def __init__(self, scene_file: Optional[str] = None, robot_ip: Optional[str] = None):
+        if robot_ip:
+            os.environ["ROBOT_IP"] = str(robot_ip)
+        print("\n" + "=" * 58)
+        print("  PyRoki (CPU JIT) -> URSim Controller (No GPU Required)")
+        print("=" * 58)
 
         if not setup_ursim():
             raise RuntimeError("Robot not RUNNING. Check URSim container.")
@@ -317,12 +249,12 @@ class CuRoboURSim:
 
         self._ik = None
         self.scene_file = scene_file
-        print("=" * 56 + "\n")
+        print("=" * 58 + "\n")
 
     @property
-    def ik_solver(self) -> CuRoboIK:
+    def ik_solver(self) -> PyrokiIK:
         if self._ik is None:
-            self._ik = CuRoboIK(scene_file=self.scene_file)
+            self._ik = PyrokiIK(scene_file=self.scene_file)
         return self._ik
 
     # -- State ---------------------------------------------------------------

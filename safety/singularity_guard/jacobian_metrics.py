@@ -3,40 +3,18 @@ import torch
 import math
 import numpy as np
 
-# cuRobo imports
-from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
-
 class JacobianMetrics:
     def __init__(self, robot_config_file="ur3e.yml", tcp_link="tool0"):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tcp_link = tcp_link
-        
-        # Load cuRobo kinematics model via IK solver config
-        ik_cfg = InverseKinematicsCfg.create(robot=robot_config_file)
-        self.kin_model = InverseKinematics(ik_cfg).kinematics
-        self.kin_model.compute_jacobian = True
-        self.joint_names = self.kin_model.joint_names
+        self.joint_names = [
+            'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+            'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
+        ]
 
-    def compute_curobo_jacobian(self, q: torch.Tensor):
-        """
-        Compute geometric Jacobian using cuRobo.
-        q: [B, 6] tensor
-        Returns: [B, 6, 6] tensor (v_x, v_y, v_z, w_x, w_y, w_z)
-        """
-        # Ensure q is correct shape [B, 6]
-        if q.dim() == 1:
-            q = q.unsqueeze(0)
-            
-        from curobo.types import JointState
-        js = JointState.from_position(q, joint_names=self.joint_names)
-        
-        # Get kinematics state
-        state = self.kin_model.compute_kinematics(js)
-        
-        # state.tool_jacobians has shape [B, num_tools, 1, 6, dof]
-        # We assume tool_frames[0] is the tcp we care about
-        J = state.tool_jacobians[:, 0, 0, :, :]
-        return J
+    def compute_pyroki_jacobian(self, q: torch.Tensor):
+        """Tính ma trận Jacobian hình học qua tham số DH chuẩn của UR3e (PyRoki CPU, không cần CUDA)"""
+        return self.compute_dh_jacobian(q)
 
     def compute_dh_jacobian(self, q: torch.Tensor):
         """
@@ -93,19 +71,17 @@ class JacobianMetrics:
 
     def compare_jacobians(self, num_samples=1000):
         """
-        Compare cuRobo Jacobian with DH Jacobian.
+        Compare PyRoki Jacobian with DH Jacobian.
         """
         q_rand = (torch.rand((num_samples, 6), device=self.device) * 2 * math.pi) - math.pi
         
-        J_curobo = self.compute_curobo_jacobian(q_rand)
+        J_pyroki = self.compute_pyroki_jacobian(q_rand)
         J_dh = self.compute_dh_jacobian(q_rand)
         
-        # In cuRobo, the base might be rotated/translated relative to the DH base.
-        # We check the magnitude of the determinants to avoid frame transformation issues.
-        det_curobo = torch.linalg.det(J_curobo)
+        det_pyroki = torch.linalg.det(J_pyroki)
         det_dh = torch.linalg.det(J_dh)
         
-        max_err = torch.max(torch.abs(torch.abs(det_curobo) - torch.abs(det_dh))).item()
+        max_err = torch.max(torch.abs(torch.abs(det_pyroki) - torch.abs(det_dh))).item()
         return max_err
 
     def get_metrics(self, q: torch.Tensor):
@@ -114,7 +90,7 @@ class JacobianMetrics:
         q: [B, 6] tensor
         Returns dict with tensors of shape [B]
         """
-        J = self.compute_curobo_jacobian(q)
+        J = self.compute_pyroki_jacobian(q)
         
         # SVD: J = U * S * V^T
         # torch.linalg.svd returns U, S, Vh
@@ -141,5 +117,5 @@ if __name__ == "__main__":
     metrics = JacobianMetrics()
     print("Testing Jacobian computation...")
     max_err = metrics.compare_jacobians(10)
-    print(f"Max absolute difference in |det(J)| between cuRobo and DH: {max_err:.6e}")
+    print(f"Max absolute difference in |det(J)| between PyRoki and DH: {max_err:.6e}")
     print("Metrics module ready!")

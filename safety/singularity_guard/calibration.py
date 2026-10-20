@@ -19,7 +19,7 @@ def calibrate_thresholds(num_samples=100000):
     metrics_calc = JacobianMetrics()
     device = metrics_calc.device
     
-    # Giới hạn khớp của UR3e (từ curobo_ursim_control.py)
+    # Giới hạn khớp của UR3e (từ pyroki_ursim_control.py)
     limits = [
         (-math.pi, math.pi),
         (-math.pi, math.pi),

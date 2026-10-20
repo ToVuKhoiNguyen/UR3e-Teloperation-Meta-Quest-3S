@@ -2,11 +2,8 @@ import os
 import time
 import socket
 import threading
-import torch
 import numpy as np
-from curobo.types import JointState
-from curobo.motion_planner import MotionPlannerCfg, MotionPlanner
-from core.curobo_ursim_control import send_urscript
+from core.pyroki_ursim_control import send_urscript
 
 
 def unlock_robot_dashboard(robot_ip: str = "127.0.0.1"):
@@ -39,30 +36,16 @@ def unlock_robot_dashboard(robot_ip: str = "127.0.0.1"):
 
 class HomePlanner:
     """
-    Quản lý quy hoạch và thực thi quỹ đạo trở về vị trí Home an toàn:
-      - Tự động mở khóa Protective Stop nếu robot bị kẹt hoặc tự va chạm
-      - Thử quy hoạch né vật cản qua CuRobo MotionPlanner C-space
-      - Dự phòng giải cứu thoát kẹt bằng nội suy khớp Smoothstep Cosine
-      - Thực thi kép: Thử RTDE servoJ trước, tự động chuyển Port 30002 movej nếu RTDE bị khóa
+    Quản lý quy hoạch và thực thi quỹ đạo trở về vị trí Home an toàn trên CPU:
+      - Tự động mở khóa Protective Stop nếu robot bị kẹt
+      - Tạo quỹ đạo không gian khớp an toàn (nâng bắp tay tránh va chạm bàn, sau đó xoay về Home)
+      - Thực thi mượt mà qua bộ sinh quỹ đạo phần cứng 500Hz movej của URScript
     """
-    def __init__(self, robot_config_path: str, scene_file: str, viz, default_home_q: list = None):
-        self.scene_file = scene_file
+    def __init__(self, robot_config_path: str = None, scene_file: str = None, viz = None, default_home_q: list = None):
         self.viz = viz
-        self.mp = None
         # Vị trí Home an toàn chuẩn của UR3e (khuỷu tay cong tự nhiên, Z=33cm, tuyệt đối không tự va chạm)
         self.default_home_q = list(default_home_q) if default_home_q is not None else [0.0, -2.2, 1.9, -1.383, -1.57, 0.0]
-
-        if os.path.exists(scene_file):
-            try:
-                mp_cfg = MotionPlannerCfg.create(robot=robot_config_path, scene_model=scene_file)
-                if self.viz and hasattr(self.viz, "add_scene"):
-                    self.viz.add_scene(mp_cfg.scene_collision_cfg.scene_model)
-                self.mp = MotionPlanner(mp_cfg)
-                print("[HomePlanner] MotionPlanner đã khởi tạo với bản đồ vật cản.")
-            except Exception as e:
-                print(f"[HomePlanner] Cảnh báo lỗi khởi tạo MotionPlanner: {e}")
-        else:
-            print(f"[HomePlanner] Cảnh báo: Không tìm thấy {scene_file}")
+        print("[HomePlanner] Khởi tạo bộ quy hoạch Go Home an toàn (CPU-only).")
 
     def go_home(
         self,
@@ -77,7 +60,7 @@ class HomePlanner:
         poll_sleep: float = 0.05,
         quest_server = None
     ) -> bool:
-        """Thực hiện quy hoạch và chạy về vị trí Home an toàn với cơ chế bảo vệ kép"""
+        """Thực hiện quy hoạch và chạy về vị trí Home an toàn"""
         if is_navigating_home is not None:
             is_navigating_home.set()
 
@@ -98,72 +81,48 @@ class HomePlanner:
             q_curr = list(ctrl.joints())
             target_home = list(self.default_home_q)
 
-            # 3. Thử giải quỹ đạo né vật cản qua CuRobo MotionPlanner
-            traj = None
-            if self.mp is not None:
-                try:
-                    q_start = JointState.from_position(
-                        torch.tensor([q_curr], dtype=torch.float32, device="cuda"),
-                        joint_names=self.mp.joint_names
-                    )
-                    q_home_js = JointState.from_position(
-                        torch.tensor([target_home], dtype=torch.float32, device="cuda"),
-                        joint_names=self.mp.joint_names
-                    )
-                    result = self.mp.plan_cspace(q_home_js, current_state=q_start)
-                    if result is not None and torch.count_nonzero(result.success) > 0:
-                        if hasattr(result, 'get_interpolated_plan'):
-                            traj = result.get_interpolated_plan().position.squeeze().cpu().tolist()
-                        else:
-                            traj = result.solution.position.squeeze().cpu().tolist() if hasattr(result.solution, 'position') else result.solution.squeeze().cpu().tolist()
-                        print("[HomePlanner] CuRobo đã tìm thấy quỹ đạo mượt né vật cản.")
-                except Exception as e:
-                    print(f"[HomePlanner] Lỗi quy hoạch CuRobo: {e}")
+            # 3. Tạo quỹ đạo an toàn 2 pha (tránh cào mặt bàn):
+            # Pha 1: Nâng cổ tay và khuỷu tay lên vị trí an toàn nếu đang ở thấp
+            # Pha 2: Di chuyển toàn bộ các khớp về vị trí target_home
+            waypoints = []
+            
+            # Nếu vai hoặc khuỷu tay đang chúc thấp, tạo một waypoint trung gian nhấc cao
+            q_intermediate = list(q_curr)
+            if q_curr[1] > -1.8:  # Vai đang chúi về phía trước
+                q_intermediate[1] = -2.0
+                q_intermediate[2] = min(q_curr[2], 1.8)
+                waypoints.append(q_intermediate)
 
-            # 4. Tạo tập điểm quỹ đạo tối ưu (nếu CuRobo không tìm được do kẹt, chạy thẳng về target_home)
-            ui_status.value = "Đang chạy về Home an toàn..."
+            waypoints.append(target_home)
 
-            if traj is not None and len(traj) > 1:
-                # Trích xuất 6-8 waypoints chính với blend radius để robot lướt mượt qua các điểm
-                step_sz = max(1, len(traj) // 8)
-                key_pts = traj[::step_sz]
-                if key_pts[-1] != target_home:
-                    key_pts.append(target_home)
-                script_lines = ["def home_trajectory():"]
-                for idx, pt in enumerate(key_pts):
-                    r = 0.025 if idx < len(key_pts) - 1 else 0.0
-                    pt_str = ", ".join(f"{x:.5f}" for x in pt)
-                    script_lines.append(f"  movej([{pt_str}], a=0.8, v=0.5, r={r})")
-                script_lines.append("end")
-                script_lines.append("home_trajectory()\n")
-                script = "\n".join(script_lines)
-            else:
-                target_str = ", ".join(f"{x:.5f}" for x in target_home)
-                script = f"def home_trajectory():\n  movej([{target_str}], a=0.8, v=0.5, r=0.0)\nend\nhome_trajectory()\n"
+            script_lines = ["def home_trajectory():"]
+            for idx, pt in enumerate(waypoints):
+                r = 0.03 if idx < len(waypoints) - 1 else 0.0
+                pt_str = ", ".join(f"{x:.5f}" for x in pt)
+                script_lines.append(f"  movej([{pt_str}], a=0.8, v=0.5, r={r})")
+            script_lines.append("end")
+            script_lines.append("home_trajectory()\n")
+            script = "\n".join(script_lines)
 
-            # 5. Gửi lệnh qua Secondary Port 30002: Bộ nội suy 500Hz của Universal Robots tự sinh quỹ đạo mượt (Zero Giật)
+            # 4. Gửi lệnh qua Secondary Port 30002
             print("[HomePlanner] Thực thi quỹ đạo chuyển động mượt qua bộ sinh quỹ đạo phần cứng URScript...")
             send_urscript(script, settle=0.1)
 
-            # 6. Vòng lặp đơn luồng giám sát và cập nhật Viser 3D mượt mà (chống xung đột đa luồng gây glitch)
+            # 5. Vòng lặp giám sát và cập nhật telemetry
             t_wait_start = time.time()
             while time.time() - t_wait_start < 8.0:
                 q_now = ctrl.joints()
-                if self.mp and self.viz and hasattr(self.viz, "set_joint_state"):
-                    js = JointState.from_position(
-                        torch.tensor([q_now], device="cuda", dtype=torch.float32),
-                        joint_names=self.mp.joint_names
-                    )
-                    self.viz.set_joint_state(js)
                 if quest_server is not None:
                     try:
-                        fk_h = teleop._curobo.fk(q_now)
+                        fk_h = teleop._solver.fk(q_now)
+                        tcp_h = ctrl.tcp()
                         quest_server.broadcast_robot_telemetry(
                             pos=fk_h["pos"],
                             quat=fk_h["quat"],
                             status="Returning Home",
                             gripper=False,
-                            joints=q_now
+                            joints=q_now,
+                            tcp_pose=tcp_h
                         )
                     except Exception:
                         pass
@@ -175,26 +134,29 @@ class HomePlanner:
             ui_status.value = "Safely returned to Home!"
             print("[HomePlanner] Đã về Home an toàn!")
 
-            # 7. Đồng bộ lại Target Widget tại vị trí mới bằng Forward Kinematics
-            fk_res = teleop._curobo.fk(target_home)
-            target_widget.position = fk_res["pos"]
-            target_widget.wxyz = fk_res["quat"]
-            widget_pose_source._ema_pos = None
-            widget_pose_source._ema_quat_xyzw = None
+            # 6. Đồng bộ lại Target Widget tại vị trí mới bằng Forward Kinematics
+            try:
+                fk_res = teleop._solver.fk(target_home)
+                target_widget.position = tuple(fk_res["pos"])
+                target_widget.wxyz = tuple(fk_res["quat"])
+            except Exception as ex:
+                print(f"[HomePlanner] Cảnh báo cập nhật widget: {ex}")
 
-            # Đặt lại hạt giống giải IK về Home để tránh lệch nhánh
+            if hasattr(widget_pose_source, "sync_with_robot"):
+                widget_pose_source.sync_with_robot(target_home)
+            else:
+                widget_pose_source._ema_pos = None
+                widget_pose_source._ema_quat_xyzw = None
             teleop._last_valid_q = list(target_home)
 
-            # 8. Bật lại cờ Teleop trên UI
+            # Bật lại cờ Teleop trên UI
             cb_teleop.value = True
             return True
 
         except Exception as e:
-            ui_status.value = f"Lỗi di chuyển Home: {e}"
-            print(f"[HomePlanner] Lỗi thực thi Go to Home: {e}")
-            executor.disconnect()
+            print(f"[HomePlanner] Lỗi khi thực hiện Go Home: {e}")
+            ui_status.value = "Lỗi Go Home!"
             return False
-
         finally:
             if is_navigating_home is not None:
                 is_navigating_home.clear()

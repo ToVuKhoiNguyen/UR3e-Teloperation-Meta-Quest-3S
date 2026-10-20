@@ -5,8 +5,9 @@ import cv2
 import numpy as np
 import torch
 import transforms3d
-from curobo.viewer import ViserVisualizer
-from curobo.types import ContentPath, JointState
+import viser
+from viser.extras import ViserUrdf
+import yourdfpy
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -14,6 +15,26 @@ JOINT_NAMES = [
     'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
     'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'
 ]
+
+def _urdf_filename_handler(fname: str) -> str:
+    base_name = os.path.basename(fname)
+    direct_asset = os.path.join(BASE_DIR, "assets", base_name)
+    if os.path.exists(direct_asset):
+        return direct_asset
+
+    if fname.startswith("package://ur_description/"):
+        rel_path = fname[len("package://ur_description/"):]
+        candidates = [
+            os.path.join(BASE_DIR, "assets", "ur_description", rel_path),
+            os.path.join(BASE_DIR, "assets", rel_path),
+            os.path.join(os.path.dirname(BASE_DIR), "src", "Universal_Robots_ROS2_Description", rel_path),
+        ]
+
+        for cand in candidates:
+            if os.path.exists(cand):
+                return cand
+    return fname
+
 
 class StatusProxy:
     """Proxy hỗ trợ truy cập .value hai chiều tương thích với Viser GUI text input cũ"""
@@ -139,18 +160,16 @@ class TeleopViserUI:
         subprocess.run(f"fuser -k {port}/tcp 2>/dev/null", shell=True)
         time.sleep(0.5)
 
-        self.viz = ViserVisualizer(
-            content_path=ContentPath(robot_config_file=robot_config_path),
-            connect_ip="0.0.0.0",
-            connect_port=port,
-            add_control_frames=False,
-        )
-        self.server = self.viz._server
+        self.server = viser.ViserServer(host="0.0.0.0", port=port)
+        urdf_path = os.path.join(BASE_DIR, "assets", "ur3e_custom.urdf")
+        self.urdf_model = yourdfpy.URDF.load(urdf_path, filename_handler=_urdf_filename_handler)
+        self.viser_urdf = ViserUrdf(self.server, self.urdf_model, root_node_name="/robot")
+        self.viz = self.viser_urdf
 
         # Đồng bộ khớp ban đầu
         self.update_robot_state(init_joints)
 
-        # Tạo Widget 3D tại tọa độ TCP ban đầu của robot (chuẩn CuRobo world)
+        # Tạo Widget 3D tại tọa độ TCP ban đầu của robot (chuẩn PyRoki world)
         pos = init_pos[:3]
         if len(init_quat) == 4:
             quat = init_quat
@@ -404,14 +423,10 @@ class TeleopViserUI:
         self._md_status.content = self._build_status_md()
 
     def update_robot_state(self, q: list):
-        """Cập nhật dáng robot thực tế lên Viser 3D"""
+        """Cập nhật dáng robot thực tế lên Viser 3D (CPU-only)"""
         if q is not None and len(q) > 0:
             self._current_q0 = float(q[0])
-        js = JointState.from_position(
-            torch.tensor([q], device="cuda", dtype=torch.float32),
-            joint_names=JOINT_NAMES
-        )
-        self.viz.set_joint_state(js)
+            self.viser_urdf.update_cfg(np.array(q, dtype=float))
 
     def update_cam_preview(self, frame_rgb: np.ndarray):
         """Cập nhật ảnh xem trực tiếp camera cổ tay lên sidebar Viser"""

@@ -33,13 +33,18 @@ class WidgetPoseSource:
         ema_quat_wxyz = [self._ema_quat_xyzw[3], self._ema_quat_xyzw[0], self._ema_quat_xyzw[1], self._ema_quat_xyzw[2]]
         return {"pos": self._ema_pos.tolist(), "quat": ema_quat_wxyz}
 
+    def sync_with_robot(self, joints=None, fk_func=None):
+        """Đồng bộ lại bộ lọc EMA với trạng thái mới để tránh giật tọa độ."""
+        self._ema_pos = None
+        self._ema_quat_xyzw = None
+
 def get_robot_fk_as_ur(teleop, ctrl):
     """
-    Dùng vị trí khớp thật (q_real) để tính FK bằng bộ não CuRobo.
-    Giúp loại bỏ sai lệch Calibration giữa URSim thật và CuRobo URDF.
+    Dùng vị trí khớp thật (q_real) để tính FK bằng bộ giải PyRoki.
+    Giúp loại bỏ sai lệch Calibration giữa URSim thật và PyRoki URDF.
     """
     q_real = ctrl.joints()
-    fk_dict = teleop._curobo.fk(q_real)
+    fk_dict = teleop._solver.fk(q_real)
     pos = fk_dict["pos"]
     quat_wxyz = fk_dict["quat"]
     axis, angle = transforms3d.quaternions.quat2axangle(quat_wxyz)

@@ -4,36 +4,29 @@ import socket
 import threading
 import numpy as np
 import torch
-from curobo.types import JointState
+from teleop.pyroki_solver import PyrokiIKSolver
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MODULE 1: CuRobo IK Solver
+# MODULE 1: PyRoki IK Solver (CPU)
 # ─────────────────────────────────────────────────────────────────────────────
 # Input:  pose = { "pos": [X,Y,Z], "quat": [Qw,Qx,Qy,Qz] }
 #         q_real = [6 góc khớp hiện tại - Radian]
-# Output: { "q": [6 Radian] hoặc None, "latency_ms": float, "solver": "curobo" }
+# Output: { "q": [6 Radian] hoặc None, "latency_ms": float, "solver": "pyroki" }
 #
-class CuRoboIKSolver:
-    def __init__(self, ik_solver):
-        self._ik = ik_solver
+class PyrokiIKSolverWrapper:
+    def __init__(self, ik_solver=None):
+        if ik_solver is not None and hasattr(ik_solver, "solve") and hasattr(ik_solver, "fk"):
+            self._ik = ik_solver
+        elif ik_solver is not None and hasattr(ik_solver, "_solver"):
+            self._ik = ik_solver._solver
+        else:
+            self._ik = PyrokiIKSolver()
 
     def solve(self, pose, q_real):
-        t0 = time.perf_counter()
-        try:
-            q = self._ik.solve(pose["pos"], pose["quat"], current_q=q_real)
-            return {"q": q, "latency_ms": (time.perf_counter() - t0) * 1000, "solver": "curobo"}
-        except Exception:
-            return {"q": None, "latency_ms": (time.perf_counter() - t0) * 1000, "solver": "curobo"}
+        return self._ik.solve(pose, q_seed=q_real)
 
     def fk(self, q: list) -> dict:
-        js = torch.tensor([q], device="cuda", dtype=torch.float32)
-        js_obj = JointState.from_position(js, joint_names=self._ik.solver.kinematics.joint_names)
-        kin_state = self._ik.solver.kinematics.compute_kinematics(js_obj)
-        pose = kin_state.tool_poses
-        return {
-            "pos": pose.position.squeeze().cpu().tolist(),
-            "quat": pose.quaternion.squeeze().cpu().tolist()  # [w, x, y, z]
-        }
+        return self._ik.fk(q)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,8 +39,8 @@ class SafetyGate:
     SHOULDER_PAN_LIMIT = 6.28   # ±360°
     SHOULDER_LIFT_MAX = 0.25    # q1 không được vượt quá +0.25 rad (~14 độ)
     SHOULDER_LIFT_MIN = -3.14   # q1 không được nhỏ hơn -3.14 rad
-    ELBOW_LIMIT = 2.80          # |q2| <= 2.80 rad (~160 độ) - Cho phép gập sâu, CuRobo tự quản lý va chạm
-    WRIST_LIMIT = 6.28          # Cho phép xoay cổ tay tự nhiên (CuRobo đã kiểm tra self-collision)
+    ELBOW_LIMIT = 2.80          # |q2| <= 2.80 rad (~160 độ) - Cho phép gập sâu, PyRoki tự quản lý va chạm
+    WRIST_LIMIT = 6.28          # Cho phép xoay cổ tay tự nhiên (PyRoki đã kiểm tra self-collision)
 
     def __init__(self, guard):
         self._guard = guard
@@ -80,11 +73,14 @@ class SafetyGate:
 class ServoJExecutor:
     ROBOT_IP = os.environ.get("ROBOT_IP", "127.0.0.1")
 
-    def __init__(self, dt=0.05, lookahead_time=0.12, gain=250):
+    def __init__(self, dt=0.05, lookahead_time=0.12, gain=250, robot_ip: str = None):
         self._dt = dt
         self._lookahead = float(os.environ.get("SERVO_LOOKAHEAD", str(lookahead_time)))
         self._gain = int(os.environ.get("SERVO_GAIN", str(gain)))
+        if robot_ip:
+            self.ROBOT_IP = robot_ip
         self._ctrl = None
+        self._last_warn_time = 0.0
         self._lock = threading.Lock()
 
     def connect(self):
@@ -161,6 +157,10 @@ class ServoJExecutor:
         """
         with self._lock:
             if self._ctrl is None:
+                now = time.time()
+                if now - self._last_warn_time >= 1.0:
+                    print("[ServoJ CẢNH BÁO] Chưa kết nối RTDEControlInterface (_ctrl is None) - không thể gửi lệnh tới robot! Hãy đảm bảo đã bật Remote Control trên PolyScope.")
+                    self._last_warn_time = now
                 return
             try:
                 # RTDEControlInterface C++ bindings only support positional arguments
@@ -183,12 +183,12 @@ class ServoJExecutor:
 #   - teleop.enabled = True/False  (toggle từ Web button)
 #   - teleop.step(q_real)          (gọi mỗi vòng lặp 20Hz)
 #   - teleop.get_status()          → string hiển thị lên UI
-#   - teleop.get_latency()         → dict latency CuRobo
+#   - teleop.get_latency()         → dict latency PyRoki
 #
 class TeleoperationController:
-    def __init__(self, pose_source, curobo_solver, safety_gate, executor, dt=0.05):
+    def __init__(self, pose_source, pyroki_solver, safety_gate, executor, dt=0.05):
         self._pose   = pose_source
-        self._curobo = curobo_solver
+        self._solver = pyroki_solver
         self._gate   = safety_gate
         self._exec   = executor
         self._dt     = dt
@@ -196,7 +196,7 @@ class TeleoperationController:
         self._enabled = False
         self._last_valid_q = None
         self._status  = "Đã tắt"
-        self._latency = {"curobo_ms": 0.0}
+        self._latency = {"pyroki_ms": 0.0}
         self._lock = threading.Lock()
 
     @property
@@ -240,16 +240,16 @@ class TeleoperationController:
         if pose is None:
             return  # pose không đổi → không gửi lệnh
 
-        # ── Giải IK bằng CuRobo GPU ─────────────────────────────────────────
+        # ── Giải IK bằng PyRoki CPU ─────────────────────────────────────────
         q_seed = self._last_valid_q if self._last_valid_q is not None else q_real
-        result_cu = self._curobo.solve(pose, q_seed)
+        result_ik = self._solver.solve(pose, q_seed)
 
         with self._lock:
-            self._latency["curobo_ms"] = result_cu["latency_ms"]
+            self._latency["pyroki_ms"] = result_ik["latency_ms"]
 
-        # ── Kiểm tra nghiệm IK CuRobo ────────────────────────────────────────
-        if result_cu["q"] is not None:
-            q_target = result_cu["q"]
+        # ── Kiểm tra nghiệm IK PyRoki ────────────────────────────────────────
+        if result_ik["q"] is not None:
+            q_target = result_ik["q"]
             # Kiểm tra bước nhảy nhánh IK bất thường (phát hiện lật khớp do gần điểm kỳ dị Singularity)
             if self._last_valid_q is not None:
                 max_jump = max(abs(q_target[i] - self._last_valid_q[i]) for i in range(6))
@@ -295,7 +295,7 @@ class TeleoperationController:
         sigma = gate["sigma_min"]
         with self._lock:
             self._status = (
-                f"[CuRobo] | "
+                f"[PyRoki] | "
                 f"sigma={sigma:.3f} | "
-                f"CuRobo:{result_cu['latency_ms']:.1f}ms"
+                f"IK:{result_ik['latency_ms']:.1f}ms"
             )

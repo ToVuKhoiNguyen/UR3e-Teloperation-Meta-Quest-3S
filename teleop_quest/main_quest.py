@@ -21,10 +21,10 @@ import threading
 import numpy as np
 import torch
 
-from core.curobo_ursim_control import CuRoboURSim
+from core.pyroki_ursim_control import PyrokiURSim
 from core.data_logger import DataLogger
 from teleop.teleoperation import (
-    CuRoboIKSolver, SafetyGate, ServoJExecutor, TeleoperationController
+    PyrokiIKSolverWrapper, SafetyGate, ServoJExecutor, TeleoperationController
 )
 from safety.singularity_guard.guard_core import SingularityGuard
 from teleop_quest.quest_server import QuestServer
@@ -56,7 +56,7 @@ def register_ui_callbacks(
     logger: DataLogger,
     teleop: TeleoperationController,
     executor: ServoJExecutor,
-    ctrl: CuRoboURSim,
+    ctrl: PyrokiURSim,
     widget_pose_source: WidgetPoseSource,
     home_planner: HomePlanner,
     quest_server: QuestServer,
@@ -146,8 +146,8 @@ def main():
     ensure_ursim_container(args.robot_ip)
 
     # 3. Khởi động Controller Robot, An toàn & Data Logger
-    print(f"[Hệ thống] Đang kết nối CuRobo và Robot UR3e tại IP: {args.robot_ip}...")
-    ctrl = CuRoboURSim(scene_file=SCENE_CONFIG)
+    print(f"[Hệ thống] Đang kết nối PyRoki (CPU JIT) và Robot UR3e tại IP: {args.robot_ip}...")
+    ctrl = PyrokiURSim(scene_file=SCENE_CONFIG, robot_ip=args.robot_ip)
     for _ in range(10):
         if np.linalg.norm(ctrl.joints()) > 0.01:
             break
@@ -167,9 +167,9 @@ def main():
     except Exception:
         pass
 
-    # 4. Tính toán vị trí ban đầu của robot qua CuRobo FK
-    curobo_solver = CuRoboIKSolver(ctrl.ik_solver)
-    fk_init = curobo_solver.fk(start_joints)
+    # 4. Tính toán vị trí ban đầu của robot qua PyRoki FK
+    pyroki_solver = PyrokiIKSolverWrapper(ctrl.ik_solver)
+    fk_init = pyroki_solver.fk(start_joints)
     robot_init_pos = fk_init["pos"]
     robot_init_quat = fk_init["quat"]
 
@@ -202,10 +202,10 @@ def main():
 
     # 6. Thiết lập nguồn tọa độ VR & Pipeline Teleop
     widget_pose_source = WidgetPoseSource(ui.target_widget)
-    executor = ServoJExecutor(dt=POLL_SLEEP, lookahead_time=0.12, gain=250)
+    executor = ServoJExecutor(dt=POLL_SLEEP, lookahead_time=0.12, gain=250, robot_ip=args.robot_ip)
     teleop = TeleoperationController(
         pose_source=widget_pose_source,
-        curobo_solver=curobo_solver,
+        pyroki_solver=pyroki_solver,
         safety_gate=SafetyGate(guard=guard),
         executor=executor
     )
@@ -334,7 +334,7 @@ def main():
         # E. Lấy trạng thái góc khớp và FK của robot
         try:
             q_real = ctrl.joints()
-            fk_res = teleop._curobo.fk(q_real)
+            fk_res = teleop._solver.fk(q_real)
         except Exception:
             q_real = None
             fk_res = None
@@ -413,7 +413,7 @@ def main():
                     ui.set_status("Vướng vật cản")
                 elif "singularity" in status_low or "kì dị" in status_low:
                     ui.set_status("Singularity")
-                elif "sigma=" in status_low or "curobo" in status_low:
+                elif "sigma=" in status_low or "pyroki" in status_low:
                     ui.set_status("Tracking")
                 else:
                     ui.set_status(current_status.split("|")[0].strip())

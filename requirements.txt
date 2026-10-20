@@ -1,0 +1,28 @@
+# Core numerical & robotics
+numpy>=1.24.0
+scipy>=1.11.0
+torch>=2.0.0
+pyyaml>=6.0
+transforms3d>=0.4.1
+h5py>=3.9.0
+
+# Network & WebXR Server
+aiohttp>=3.8.0
+cryptography>=41.0.0
+opencv-python-headless>=4.8.0
+
+# UR Robot Communication
+ur_rtde>=1.5.0
+
+# Viser 3D Web Visualizer
+viser>=0.2.0
+yourdfpy>=0.0.53
+trimesh>=4.0.0
+
+# PyRoki CPU Kinematics & Optimization (JAX)
+jax[cpu]>=0.4.20
+jaxlie>=1.0.0
+jaxls @ git+https://github.com/brentyi/jaxls.git
+pyroki @ git+https://github.com/chungmin99/pyroki.git
+loguru>=0.7.0
+robot_descriptions>=1.10.0
