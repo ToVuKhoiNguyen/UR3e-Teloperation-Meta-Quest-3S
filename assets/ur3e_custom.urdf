@@ -294,4 +294,70 @@
     <parent link="flange"/>
     <child link="tool0"/>
   </joint>
+  <!-- Camera Mount Link and Joint -->
+  <link name="camera_mount_link">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://ur_description/robot_camera_mount_1.stl"/>
+      </geometry>
+      <material name="MountDarkGrey">
+        <color rgba="0.25 0.25 0.25 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://ur_description/robot_camera_mount_1.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <origin rpy="0 0 0" xyz="0 0.04 0.003"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+  <joint name="tool0-camera_mount" type="fixed">
+    <parent link="tool0"/>
+    <child link="camera_mount_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+  </joint>
+
+  <!-- Intel RealSense D455 Camera Link and Joint -->
+  <link name="d455_link">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://ur_description/d455.stl"/>
+      </geometry>
+      <material name="D455Grey">
+        <color rgba="0.75 0.75 0.75 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="package://ur_description/d455.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.072"/>
+      <origin rpy="0 0 0" xyz="0 0 0.013"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+  <joint name="camera_mount-d455" type="fixed">
+    <parent link="camera_mount_link"/>
+    <child link="d455_link"/>
+    <origin rpy="0 0 0" xyz="0 0.06573 0.006"/>
+  </joint>
+
+  <!-- Intel RealSense D455 Optical Frame (OpenCV / ROS REP-103 optical convention) -->
+  <link name="camera_color_optical_frame"/>
+  <joint name="d455-camera_color_optical" type="fixed">
+    <parent link="d455_link"/>
+    <child link="camera_color_optical_frame"/>
+    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0.0325 0 0.026"/>
+  </joint>
 </robot>
+
