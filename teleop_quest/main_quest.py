@@ -122,8 +122,9 @@ def register_ui_callbacks(
 def parse_args():
     parser = argparse.ArgumentParser(description="UR3e WebXR Teleoperation")
     parser.add_argument("--robot-ip", type=str, default=os.environ.get("ROBOT_IP", "127.0.0.1"), help="Địa chỉ IP của Robot UR3e hoặc URSim")
-    parser.add_argument("--camera", type=str, choices=["synthetic", "real"], default="synthetic", help="Nguồn camera: synthetic hoặc real")
-    parser.add_argument("--camera-device", type=int, default=0, help="Device ID của camera thật")
+    parser.add_argument("--camera", type=str, choices=["synthetic", "real", "realsense", "d455", "d435"], default="synthetic", help="Nguồn camera: synthetic, real hoặc realsense (D455/D435)")
+    parser.add_argument("--camera-device", type=int, default=0, help="Device ID của camera thật (OpenCV)")
+    parser.add_argument("--camera-serial", type=str, default=None, help="Serial number của camera RealSense (mặc định: tự động nhận diện)")
     args, _ = parser.parse_known_args()
     return args
 
@@ -187,7 +188,7 @@ def main():
     ui.set_episodes(logger.current_episode_idx)
 
     grasp_sim = GraspSimulator(ui.server, pick_pos=pick_pos, place_pos=place_pos)
-    wrist_cam = create_wrist_camera(camera_type=args.camera, device_index=args.camera_device, width=640, height=480)
+    wrist_cam = create_wrist_camera(camera_type=args.camera, device_index=args.camera_device, serial_number=args.camera_serial, width=640, height=480)
 
     camera_pipeline = CameraStreamPipeline(
         wrist_cam=wrist_cam,
