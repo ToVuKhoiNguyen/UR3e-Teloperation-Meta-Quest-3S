@@ -60,6 +60,8 @@ def register_ui_callbacks(
     home_planner: HomePlanner,
     quest_server: QuestServer,
     is_navigating_home: threading.Event,
+    pose_source: DeltaPoseSource = None,
+    trigger_go_home = None,
 ):
     """Đăng ký sự kiện các nút bấm trên giao diện Viser UI"""
     placed_at_start = [0]
@@ -166,26 +168,39 @@ def register_ui_callbacks(
 
     @ui.btn_home.on_click
     def _on_btn_home_click(_):
-        if is_navigating_home.is_set():
-            print("[HomePlanner] Đang di chuyển về Home, vui lòng đợi...")
-            return
-        is_navigating_home.set()
-        teleop.enabled = False
-        ui.cb_teleop.value = False
-        ui.update_controller_visual(is_home=True)
-        threading.Thread(
-            target=home_planner.go_home,
-            args=(
-                teleop, executor, ctrl, ui.target_widget,
-                widget_pose_source, ui.ui_status, ui.cb_teleop
-            ),
-            kwargs={
-                "is_navigating_home": is_navigating_home,
-                "poll_sleep": POLL_SLEEP,
-                "quest_server": quest_server
-            },
-            daemon=True
-        ).start()
+        if trigger_go_home is not None:
+            trigger_go_home(source_name="Viser UI Nút Home")
+        else:
+            if is_navigating_home.is_set():
+                print("[HomePlanner] Đang di chuyển về Home, vui lòng đợi...")
+                return
+            is_navigating_home.set()
+            teleop.enabled = False
+            ui.cb_teleop.value = False
+            ui.update_controller_visual(is_home=True)
+            threading.Thread(
+                target=home_planner.go_home,
+                args=(
+                    teleop, executor, ctrl, ui.target_widget,
+                    widget_pose_source, ui.ui_status, ui.cb_teleop
+                ),
+                kwargs={
+                    "is_navigating_home": is_navigating_home,
+                    "poll_sleep": POLL_SLEEP,
+                    "quest_server": quest_server
+                },
+                daemon=True
+            ).start()
+
+    if hasattr(ui, "slider_sensitivity") and ui.slider_sensitivity is not None:
+        @ui.slider_sensitivity.on_update
+        def _on_sensitivity_update(_):
+            t0 = time.perf_counter()
+            new_scale = float(ui.slider_sensitivity.value)
+            if pose_source is not None and abs(pose_source.scale - new_scale) > 1e-3:
+                pose_source.scale = new_scale
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[Viser UI Event] Điều chỉnh độ nhạy (Scale): {new_scale:.2f} (Độ trễ: {latency_ms:.2f}ms)")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="UR3e WebXR Teleoperation")
@@ -291,9 +306,37 @@ def main():
     home_planner = HomePlanner(scene_file=SCENE_CONFIG, viz=ui.viz, default_home_q=SAFE_HOME_JOINTS)
 
     is_navigating_home = threading.Event()
+
+    def trigger_go_home(source_name="VR"):
+        t0 = time.perf_counter()
+        if is_navigating_home.is_set():
+            print(f"[HomePlanner] ({source_name}) Đang di chuyển về Home, bỏ qua lệnh mới...")
+            return False
+        is_navigating_home.set()
+        teleop.enabled = False
+        ui.cb_teleop.value = False
+        ui.update_controller_visual(is_home=True)
+        threading.Thread(
+            target=home_planner.go_home,
+            args=(
+                teleop, executor, ctrl, ui.target_widget,
+                widget_pose_source, ui.ui_status, ui.cb_teleop
+            ),
+            kwargs={
+                "is_navigating_home": is_navigating_home,
+                "poll_sleep": POLL_SLEEP,
+                "quest_server": quest_server
+            },
+            daemon=True
+        ).start()
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        print(f"[HomePlanner] Kích hoạt Go Home từ {source_name} (Độ trễ khởi tạo: {latency_ms:.2f}ms)")
+        return True
+
     register_ui_callbacks(
         ui, grasp_sim, logger, teleop, executor, ctrl,
-        widget_pose_source, home_planner, quest_server, is_navigating_home
+        widget_pose_source, home_planner, quest_server, is_navigating_home,
+        pose_source=pose_source, trigger_go_home=trigger_go_home
     )
 
     # Xử lý tắt an toàn
@@ -318,6 +361,8 @@ def main():
     _last_btn_b_state = False
     _last_trig_state = False
     _last_grip_state = False
+    _last_thumbstick_click_state = False
+    _last_scale_log_time = 0.0
 
     # 8. Vòng lặp điều khiển chính (20Hz)
     while True:
@@ -353,9 +398,41 @@ def main():
         _is_grip = bool(vr_frame.get("grip", False)) if vr_frame else False
         _is_btn_b = bool(vr_frame.get("button_b", False) or vr_frame.get("button_y", False)) if vr_frame else False
         _is_joy_tilt = bool(vr_frame.get("joystick_tilt", False)) if vr_frame else False
+        _is_thumbstick_click = bool(
+            vr_frame.get("thumbstick_click", False) or
+            vr_frame.get("home", False)
+        ) if vr_frame else False
         _is_home = is_navigating_home.is_set()
         if vr_frame and vr_frame.get("thumbstick", False) and not _is_home and not _is_joy_tilt:
             _is_joy_tilt = True
+
+        # B1. Xử lý sự kiện nhấn cần Joystick (Thumbstick Click) -> Về Home an toàn
+        thumbstick_click_triggered = _is_thumbstick_click and not _last_thumbstick_click_state
+        _last_thumbstick_click_state = _is_thumbstick_click
+        if thumbstick_click_triggered:
+            t_click = time.perf_counter()
+            quest_server.send_haptic(intensity=1.0, duration=300)
+            trigger_go_home(source_name="VR Thumbstick Click (Nút Joystick)")
+            latency_ms = (time.perf_counter() - t_click) * 1000.0
+            print(f"[VR Teleop] Sự kiện nhấn Joystick (Thumbstick Click) -> Về Home (Độ trễ phản hồi: {latency_ms:.2f}ms)")
+
+        # B2. Tinh chỉnh độ nhạy (Scale) bằng cần Analog dọc (Thumbstick Y) theo thời gian thực
+        thumbstick_axes = vr_frame.get("thumbstick_axes", [0.0, 0.0]) if vr_frame else [0.0, 0.0]
+        stick_y = float(thumbstick_axes[1]) if (isinstance(thumbstick_axes, (list, tuple)) and len(thumbstick_axes) > 1) else float(vr_frame.get("thumbstick_y", 0.0) if vr_frame else 0.0)
+
+        if not _is_trig and not _is_grip and not is_navigating_home.is_set() and abs(stick_y) > 0.35:
+            t_stick = time.perf_counter()
+            # Cần đẩy lên (stick_y < -0.35): Tăng độ nhạy; Kéo xuống (stick_y > 0.35): Giảm độ nhạy
+            d_scale = -stick_y * 0.4 * POLL_SLEEP
+            new_scale = float(np.clip(pose_source.scale + d_scale, 0.1, 2.0))
+            if abs(new_scale - pose_source.scale) > 0.005:
+                pose_source.scale = round(new_scale, 2)
+                if hasattr(ui, "slider_sensitivity") and ui.slider_sensitivity is not None:
+                    ui.slider_sensitivity.value = pose_source.scale
+                latency_ms = (time.perf_counter() - t_stick) * 1000.0
+                if time.time() - _last_scale_log_time > 0.4:
+                    _last_scale_log_time = time.time()
+                    print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {pose_source.scale:.2f} (Độ trễ: {latency_ms:.2f}ms)")
 
         # C. Xử lý Nút B (hoặc Y trên tay trái):
         # - Nếu đang bóp Grip + ấn Nút B -> Hiệu chuẩn bàn máy (Grip + B combo)
@@ -460,7 +537,7 @@ def main():
             is_rotating=_is_grip,
             is_gripper_btn=raw_vr_gripper,
             is_btn_b=_is_btn_b,
-            is_joystick=_is_joy_tilt,
+            is_joystick=(_is_joy_tilt or _is_thumbstick_click or abs(stick_y) > 0.35),
             is_home=_is_home
         )
 
