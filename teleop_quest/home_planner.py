@@ -108,10 +108,15 @@ class HomePlanner:
             print("[HomePlanner] Thực thi quỹ đạo chuyển động mượt qua bộ sinh quỹ đạo phần cứng URScript...")
             send_urscript(script, settle=0.1)
 
-            # 5. Vòng lặp giám sát và cập nhật telemetry
+            # 5. Vòng lặp giám sát và cập nhật Viser 3D mượt mà theo góc khớp thực
             t_wait_start = time.time()
             while time.time() - t_wait_start < 8.0:
                 q_now = ctrl.joints()
+                if self.viz is not None and q_now is not None:
+                    if hasattr(self.viz, "update_cfg"):
+                        self.viz.update_cfg(np.array(q_now, dtype=float))
+                    elif hasattr(self.viz, "update_robot_state"):
+                        self.viz.update_robot_state(q_now)
                 if quest_server is not None:
                     try:
                         fk_h = teleop._solver.fk(q_now)
@@ -126,10 +131,18 @@ class HomePlanner:
                         )
                     except Exception:
                         pass
-                dist_to_home = sum(abs(q_now[i] - target_home[i]) for i in range(6))
-                if dist_to_home < 0.03:
+                max_dev = max(abs(q_now[i] - target_home[i]) for i in range(6))
+                if max_dev < 0.02:
                     break
                 time.sleep(0.04)
+
+            # Cập nhật dáng robot lần cuối khi đã tới đích
+            q_final = ctrl.joints()
+            if self.viz is not None and q_final is not None:
+                if hasattr(self.viz, "update_cfg"):
+                    self.viz.update_cfg(np.array(q_final, dtype=float))
+                elif hasattr(self.viz, "update_robot_state"):
+                    self.viz.update_robot_state(q_final)
 
             ui_status.value = "Safely returned to Home!"
             print("[HomePlanner] Đã về Home an toàn!")
@@ -142,14 +155,15 @@ class HomePlanner:
             except Exception as ex:
                 print(f"[HomePlanner] Cảnh báo cập nhật widget: {ex}")
 
-            if hasattr(widget_pose_source, "sync_with_robot"):
-                widget_pose_source.sync_with_robot(target_home)
-            else:
-                widget_pose_source._ema_pos = None
-                widget_pose_source._ema_quat_xyzw = None
+            if widget_pose_source is not None:
+                if hasattr(widget_pose_source, "sync_with_robot"):
+                    widget_pose_source.sync_with_robot(target_home)
+                else:
+                    widget_pose_source._ema_pos = None
+                    widget_pose_source._ema_quat_xyzw = None
             teleop._last_valid_q = list(target_home)
 
-            # Bật lại cờ Teleop trên UI
+            # Bật lại cờ Teleop trên UI sau khi robot đã về đích hoàn tất
             cb_teleop.value = True
             return True
 
