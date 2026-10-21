@@ -547,6 +547,7 @@ def main():
         delta_trans = pose_source.get_delta_translation() if hasattr(pose_source, "get_delta_translation") else np.zeros(3)
         vr_quat = vr_frame.get("quat", None) if vr_frame else None
 
+        t_hud_start = time.perf_counter()
         ui.update_controller_visual(
             is_translating=_is_trig,
             is_rotating=_is_grip,
@@ -557,6 +558,11 @@ def main():
             delta_trans=delta_trans,
             vr_quat=vr_quat
         )
+        t_latency_hud = (time.perf_counter() - t_hud_start) * 1000.0
+
+        if _is_trig and delta_trans is not None and len(delta_trans) >= 1 and delta_trans[0] > 0.01:
+            disp_cm = min(delta_trans[0] * 0.20 * 100.0, 2.5)
+            print(f"[HUD] HUD nudged Forward: {disp_cm:.1f}cm (Độ trễ: {t_latency_hud:.2f}ms)")
 
         if toggle_triggered:
             _gripper_active = not _gripper_active

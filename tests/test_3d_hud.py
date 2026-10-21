@@ -45,14 +45,11 @@ class Test3DHUD(unittest.TestCase):
             self.assertEqual(handle.scale, (-1.0, 1.0, 1.0), f"Handle {mode} must have scale (-1, 1, 1)")
 
     def test_04_hud_upright_orientation_math(self):
-        """Kiểm tra ma trận xoay offset bù hướng: Cán tay cầm chúc xuống và mặt nút hướng về người dùng"""
-        # Giả lập camera nhìn từ trước
-        class DummyCam:
-            position = (0.0, -1.0, 0.5)
-            # Camera nhìn vào gốc tọa độ (quay quanh trục X)
-            wxyz = (0.9238795, 0.3826834, 0.0, 0.0)
+        """Kiểm tra góc xoay mặc định của 3D HUD: Dựng đứng trực diện đối diện người dùng"""
+        expected_base_wxyz = (0.1464466, 0.3535534, -0.8535534, -0.3535534)
+        np.testing.assert_allclose(self.ui._hud_base_wxyz, expected_base_wxyz, atol=1e-3)
+        self.assertEqual(self.ui._hud_mode, "fixed_world")
 
-        self.ui._sync_hud_to_camera(DummyCam())
         # Cán tay cầm trong tọa độ camera (trục Z local) phải có thành phần Y_cam > 0 (chúc xuống)
         r_tilt = np.array([
             [1.0,  0.0,     0.0],
@@ -65,25 +62,26 @@ class Test3DHUD(unittest.TestCase):
         self.assertLess(y_in_cam[2], -0.9, "Face must point towards viewer (-Z)")
 
     def test_05_micro_displacement_latency(self):
-        """Khi bóp cò và dịch chuyển: HUD nhích vi mô an toàn, độ trễ cập nhật < 50ms"""
+        """Khi bóp cò và dịch chuyển: HUD nhích vi mô 2cm khi đẩy tiến 10cm, độ trễ cập nhật < 50ms"""
         t0 = time.perf_counter()
         self.ui.update_controller_visual(
             is_translating=True,
-            delta_trans=np.array([0.08, 0.0, 0.0]),  # Tiến +8cm
+            delta_trans=np.array([0.10, 0.0, 0.0]),  # Tiến +10cm
             vr_quat=[1.0, 0.0, 0.0, 0.0]
         )
         latency_ms = (time.perf_counter() - t0) * 1000.0
         self.assertLess(latency_ms, 50.0)
 
-        # Vị trí HUD có dịch chuyển vi mô trong ngưỡng an toàn <= 2.5cm
+        # Vị trí HUD dịch chuyển vi mô đúng 2.0cm (scale 0.20)
         current_pos = np.array(self.ui._hud_frame.position)
         self.assertFalse(np.allclose(current_pos, self.ui._hud_base_pos))
         disp_dist = np.linalg.norm(current_pos - self.ui._hud_base_pos)
+        self.assertAlmostEqual(disp_dist, 0.020, places=3)
         self.assertLessEqual(disp_dist, 0.026)
 
-        # Khi nhả cò: Về lại vị trí gốc
+        # Khi nhả cò: Về lại vị trí gốc [0.42, -0.38, 0.12]
         self.ui.update_controller_visual(is_translating=False, delta_trans=np.zeros(3))
-        np.testing.assert_allclose(self.ui._hud_frame.position, self.ui._hud_base_pos, atol=1e-5)
+        np.testing.assert_allclose(self.ui._hud_frame.position, [0.42, -0.38, 0.12], atol=1e-5)
 
 if __name__ == "__main__":
     unittest.main()

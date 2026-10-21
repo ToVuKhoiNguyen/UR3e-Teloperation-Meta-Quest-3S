@@ -184,19 +184,19 @@ class TeleopViserUI:
 
         # 3. Tạo Node 3D HUD (mặc định tại góc phải bàn máy, an toàn không che robot)
         self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
-        self._hud_base_wxyz = init_ctrl_wxyz
-        self._init_ctrl_wxyz = init_ctrl_wxyz
+        self._hud_base_wxyz = (0.1464466, 0.3535534, -0.8535534, -0.3535534)
+        self._init_ctrl_wxyz = self._hud_base_wxyz
         self._hud_frame = self.server.scene.add_frame(
             "vr_controller_hud",
             position=tuple(self._hud_base_pos),
-            wxyz=init_ctrl_wxyz,
+            wxyz=self._hud_base_wxyz,
             show_axes=False
         )
         self._ctrl_frame = self._hud_frame  # Giữ alias cho backward-compatibility
 
 
         # Quản lý chế độ HUD (Viewport góc màn hình vs Fixed World góc bàn máy)
-        self._hud_mode = "viewport"
+        self._hud_mode = "fixed_world"
         self._client_cameras = {}
 
         @self.server.on_client_connect
@@ -486,7 +486,7 @@ class TeleopViserUI:
                 if norm_q > 1e-4:
                     q /= norm_q
                     r_wrist = transforms3d.quaternions.quat2mat(q)
-                    if self._hud_mode == "viewport" and hasattr(self, "_hud_base_wxyz"):
+                    if hasattr(self, "_hud_base_wxyz"):
                         r_base = transforms3d.quaternions.quat2mat(self._hud_base_wxyz)
                         r_hud = r_base @ r_wrist
                     else:
@@ -497,19 +497,22 @@ class TeleopViserUI:
         elif hasattr(self, "_hud_base_wxyz"):
             self._hud_frame.wxyz = self._hud_base_wxyz
 
-        # 3. Quản lý phản hồi tịnh tiến (Độ đàn hồi vi mô)
+        # 3. Quản lý phản hồi tịnh tiến (Độ đàn hồi vi mô - Micro-translation)
         if hasattr(self, "_hud_frame") and hasattr(self, "_hud_base_pos"):
             if is_translating and delta_trans is not None and len(delta_trans) == 3:
                 d_fwd = float(delta_trans[0])
                 d_lat = float(delta_trans[1])
                 d_vert = float(delta_trans[2])
-                mag = float(np.hypot(np.hypot(d_fwd, d_lat), d_vert))
-                if mag > 0.002:  # Ngưỡng nhạy 2mm
-                    k_spring = min(0.12, 0.025 / (mag + 1e-6))
-                    disp = np.array([d_lat, -d_fwd, d_vert], dtype=float) * k_spring
-                    self._hud_frame.position = tuple(self._hud_base_pos + disp)
-                else:
-                    self._hud_frame.position = tuple(self._hud_base_pos)
+                alpha_micro = 0.20
+                disp = np.array([
+                    -0.7071 * d_fwd + 0.7071 * d_lat,
+                     0.7071 * d_fwd + 0.7071 * d_lat,
+                     d_vert
+                ], dtype=float) * alpha_micro
+                disp_norm = np.linalg.norm(disp)
+                if disp_norm > 0.025:
+                    disp = disp * (0.025 / disp_norm)
+                self._hud_frame.position = tuple(self._hud_base_pos + disp)
             else:
                 self._hud_frame.position = tuple(self._hud_base_pos)
 
