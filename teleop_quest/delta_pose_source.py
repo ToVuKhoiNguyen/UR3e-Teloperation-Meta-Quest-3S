@@ -51,6 +51,9 @@ class DeltaPoseSource:
         # Cấu hình chống nhiễu chuyên sâu (Anti-Noise & Jitter Suppression)
         self.rot_deadband = float(os.environ.get("ROT_DEADBAND", "0.045"))  # ~2.6 độ (triệt tiêu rung tay khi bóp giữ phím)
         self.pos_deadband = float(os.environ.get("POS_DEADBAND", "0.003"))  # 3mm (triệt tiêu vi rung khi giữ yên tay)
+        self.fwd_deadband = float(os.environ.get("FWD_DEADBAND", "0.0015")) # 1.5mm (nhạy bén cho trục Tiến/Lùi dải nhỏ)
+        self.lat_deadband = float(os.environ.get("LAT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu rung lắc ngang do bóp ngón trỏ)
+        self.vert_deadband = float(os.environ.get("VERT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu vi rung nâng hạ tay)
         self.rot_snap_low = float(os.environ.get("ROT_SNAP_LOW", "0.55"))   # < 55%: khóa cứng rãnh đơn trục (Phương án A)
         self.rot_snap_high = float(os.environ.get("ROT_SNAP_HIGH", "0.75")) # > 75%: mở xoay 3D đa trục khi chủ ý bẻ chéo lớn
         self._last_dominant_rot_axis = None
@@ -255,11 +258,23 @@ class DeltaPoseSource:
             except Exception:
                 self._anchor_theta_arm = None
             
-            # Xác lập hệ quy chiếu điều khiển (Heading Reference) - Hiệu chuẩn theo bàn máy:
-            # Mỗi lần bóp cò: Dùng _desk_u_fwd / _desk_u_right làm _anchor_u_fwd / _anchor_u_right,
-            # KHÔNG tính lại từ head_quat.
-            self._anchor_u_fwd = np.copy(self._desk_u_fwd)
-            self._anchor_u_right = np.copy(self._desk_u_right)
+            # Xác lập hệ quy chiếu điều khiển (Heading Reference):
+            # Tự động chốt hướng nhìn kính (Head Yaw) làm trục Tiến khi bóp cò để triệt tiêu góc lệch tự nhiên:
+            head_quat = frame.get("head_quat", None)
+            if head_quat is not None:
+                r_head = R.from_quat([head_quat[1], head_quat[2], head_quat[3], head_quat[0]])
+                v_fwd = r_head.apply([0, 0, -1])  # Hướng nhìn trong không gian phòng WebXR
+                fx, fz = float(v_fwd[0]), float(v_fwd[2])
+                norm_h = float(np.hypot(fx, fz))
+                if norm_h > 0.05:
+                    self._anchor_u_fwd = np.array([fx / norm_h, 0.0, fz / norm_h])
+                    self._anchor_u_right = np.array([-fz / norm_h, 0.0, fx / norm_h])
+                else:
+                    self._anchor_u_fwd = np.copy(self._desk_u_fwd)
+                    self._anchor_u_right = np.copy(self._desk_u_right)
+            else:
+                self._anchor_u_fwd = np.copy(self._desk_u_fwd)
+                self._anchor_u_right = np.copy(self._desk_u_right)
 
             self._ema_pos = np.copy(self._anchor_tcp[:3])
             self._ema_quat_xyzw = np.copy(self._anchor_quat_robot_xyzw)
@@ -279,28 +294,44 @@ class DeltaPoseSource:
         
         if is_translating:
             current_pos_quest = np.array(frame["pos"])
-            # delta_q_world là sự thay đổi vị trí tay người dùng trong KHÔNG GIAN THỰC
-            # (Trái/Phải, Lên/Xuống, Tiến/Lùi) so với lúc vừa bấm cò
-            delta_q_world = current_pos_quest - self._anchor_pos_quest
+            # delta_q_raw là sự thay đổi vị trí tay người dùng trong KHÔNG GIAN THỰC
+            # so với lúc vừa bấm cò
+            delta_q_raw = current_pos_quest - self._anchor_pos_quest
+            delta_mag = np.linalg.norm(delta_q_raw)
             
-            # --- BỘ LỌC CHỐNG NHIỄU & CHẨN ĐOÁN ---
-            delta_mag = np.linalg.norm(delta_q_world)
-            
-            if delta_mag < self.pos_deadband:  # Deadband tĩnh 6mm (loại bỏ vi rung sinh học khi bóp giữ cò)
-                delta_q_world = np.zeros(3)
-            else:
-                # SOFT DEADBAND: Khử độ nhảy vọt khi vượt ngưỡng
-                delta_q_world = delta_q_world * ((delta_mag - self.pos_deadband) / delta_mag)
-                        
-            # Chiếu cử động tay người dùng theo hệ quy chiếu bàn máy / hướng nhìn:
+            # Chiếu cử động thô theo hệ quy chiếu hướng nhìn / bàn máy:
             if self._anchor_u_fwd is not None and self._anchor_u_right is not None:
-                d_forward_raw = float(np.dot(delta_q_world, self._anchor_u_fwd))
-                d_lateral_raw = float(np.dot(delta_q_world, self._anchor_u_right))
-                d_vertical_raw = float(delta_q_world[1])
+                d_fwd_unfiltered = float(np.dot(delta_q_raw, self._anchor_u_fwd))
+                d_lat_unfiltered = float(np.dot(delta_q_raw, self._anchor_u_right))
+                d_vert_unfiltered = float(delta_q_raw[1])
             else:
-                d_forward_raw = -delta_q_world[2]   # Tiến (-Z) / Lùi (+Z)
-                d_lateral_raw =  delta_q_world[0]   # Phải (+X) / Trái (-X)
-                d_vertical_raw = delta_q_world[1]   # Lên (+Y) / Xuống (-Y)
+                d_fwd_unfiltered = -float(delta_q_raw[2])
+                d_lat_unfiltered =  float(delta_q_raw[0])
+                d_vert_unfiltered = float(delta_q_raw[1])
+
+            # Áp dụng Soft Deadband riêng từng trục:
+            # 1. Trục Tiến/Lùi: deadband 1.5mm (nhạy bén ngay khi vừa nhích nhẹ)
+            abs_fwd = abs(d_fwd_unfiltered)
+            if abs_fwd < self.fwd_deadband:
+                d_forward_raw = 0.0
+            else:
+                d_forward_raw = math.copysign(abs_fwd - self.fwd_deadband, d_fwd_unfiltered)
+
+            # 2. Trục Phải/Trái: deadband 3.5mm (triệt tiêu rung lắc ngang do bóp ngón trỏ)
+            abs_lat = abs(d_lat_unfiltered)
+            if abs_lat < self.lat_deadband:
+                d_lateral_raw = 0.0
+            else:
+                d_lateral_raw = math.copysign(abs_lat - self.lat_deadband, d_lat_unfiltered)
+
+            # 3. Trục Cao/Thấp: deadband 3.5mm (triệt tiêu vi rung nâng hạ tay)
+            abs_vert = abs(d_vert_unfiltered)
+            if abs_vert < self.vert_deadband:
+                d_vertical_raw = 0.0
+            else:
+                d_vertical_raw = math.copysign(abs_vert - self.vert_deadband, d_vert_unfiltered)
+
+            delta_q_world = delta_q_raw
 
             # Áp dụng Thuật toán triệt tiêu nhiễu chéo đa trục thông minh (Smooth Axis Isolation):
             if self.enable_axis_snapping:
@@ -364,8 +395,16 @@ class DeltaPoseSource:
                 # 2. Tiến / Lùi -> Duỗi dài hoặc Thu ngắn kim đồng hồ theo phương vươn cơ học:
                 # Vector vươn u_reach nằm trong mặt phẳng tay máy tại góc đế q0_target:
                 u_reach = np.array([np.cos(q0_target), np.sin(q0_target), 0.0])
-                # Tăng hệ số nhạy hướng Tiến/Lùi lên mức 1:1 (scale_reach = 1.05) để vươn dứt khoát
-                scale_reach = float(os.environ.get("REACH_SCALE", "1.05"))
+                # Khuếch đại phi tuyến dải nhỏ: < 2cm dùng scale_reach = 1.35 giúp đẩy nhẹ tay
+                # thì cánh tay duỗi rõ rệt; khi đẩy dài hơn (> 2cm), chuyển tiếp mượt về 1.05
+                base_scale_reach = float(os.environ.get("REACH_SCALE", "1.05"))
+                abs_fwd_m = abs(d_forward)
+                if abs_fwd_m < 0.02:
+                    t_boost = abs_fwd_m / 0.02
+                    scale_reach = 1.35 - (1.35 - base_scale_reach) * t_boost
+                else:
+                    scale_reach = base_scale_reach
+
                 delta_reach = d_forward * scale_reach
                 delta_reach = np.clip(delta_reach, -self.max_delta_m, self.max_delta_m)
 
