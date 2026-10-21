@@ -45,21 +45,15 @@ class Test3DHUD(unittest.TestCase):
             self.assertEqual(handle.scale, (-1.0, 1.0, 1.0), f"Handle {mode} must have scale (-1, 1, 1)")
 
     def test_04_hud_upright_orientation_math(self):
-        """Kiểm tra góc xoay mặc định của 3D HUD: Dựng đứng trực diện đối diện người dùng"""
-        expected_base_wxyz = (0.1464466, 0.3535534, -0.8535534, -0.3535534)
-        np.testing.assert_allclose(self.ui._hud_base_wxyz, expected_base_wxyz, atol=1e-3)
-        self.assertEqual(self.ui._hud_mode, "fixed_world")
+        """Kiểm tra góc xoay mặc định của 3D HUD: Dựng đứng trực diện đối diện người dùng trong Camera Space"""
+        self.assertEqual(self.ui._hud_mode, "viewport")
 
-        # Cán tay cầm trong tọa độ camera (trục Z local) phải có thành phần Y_cam > 0 (chúc xuống)
-        r_tilt = np.array([
-            [1.0,  0.0,     0.0],
-            [0.0,  0.2588,  0.9659],
-            [0.0, -0.9659,  0.2588]
-        ], dtype=float)
-        z_in_cam = r_tilt @ np.array([0.0, 0.0, 1.0])
-        self.assertGreater(z_in_cam[1], 0.9, "Handle must point downward in camera space (+Y)")
-        y_in_cam = r_tilt @ np.array([0.0, 1.0, 0.0])
-        self.assertLess(y_in_cam[2], -0.9, "Face must point towards viewer (-Z)")
+        # Cán tay cầm trong tọa độ camera (trục Z local) phải có thành phần Y_cam > 0.90 (chúc xuống)
+        z_in_cam = self.ui._r_hud_upright @ np.array([0.0, 0.0, 1.0])
+        self.assertGreater(z_in_cam[1], 0.90, "Handle must point downward in camera space (+Y)")
+        # Mặt phím trong tọa độ camera (trục Y local) phải có thành phần Z_cam < -0.90 (hướng vào mắt người nhìn)
+        y_in_cam = self.ui._r_hud_upright @ np.array([0.0, 1.0, 0.0])
+        self.assertLess(y_in_cam[2], -0.90, "Face must point towards viewer (-Z)")
 
     def test_05_micro_displacement_latency(self):
         """Khi bóp cò và dịch chuyển: HUD nhích vi mô 2cm khi đẩy tiến 10cm, độ trễ cập nhật < 50ms"""
@@ -79,9 +73,41 @@ class Test3DHUD(unittest.TestCase):
         self.assertAlmostEqual(disp_dist, 0.020, places=3)
         self.assertLessEqual(disp_dist, 0.026)
 
-        # Khi nhả cò: Về lại vị trí gốc [0.42, -0.38, 0.12]
+        # Khi nhả cò: Về lại vị trí gốc
         self.ui.update_controller_visual(is_translating=False, delta_trans=np.zeros(3))
-        np.testing.assert_allclose(self.ui._hud_frame.position, [0.42, -0.38, 0.12], atol=1e-5)
+        np.testing.assert_allclose(self.ui._hud_frame.position, self.ui._hud_base_pos, atol=1e-5)
+
+    def test_06_camera_360_orbit_invariance(self):
+        """Khi người dùng xoay sa bàn 3D 360 độ: HUD luôn cố định chính xác tại góc dưới-phải màn hình"""
+        import transforms3d
+        class MockCam:
+            def __init__(self, pos, wxyz):
+                self.position = pos
+                self.wxyz = wxyz
+
+        angles = [0, 45, 90, 135, 180, 225, 270, 315, 360]
+        for deg in angles:
+            rad = np.radians(deg)
+            # Camera xoay quanh bàn máy bán kính 1.2m, độ cao 0.5m, nhìn về gốc tọa độ
+            pos_cam = np.array([1.2 * np.cos(rad), 1.2 * np.sin(rad), 0.5])
+            z_cam = -pos_cam / np.linalg.norm(pos_cam)
+            up_world = np.array([0.0, 0.0, 1.0])
+            x_cam = np.cross(z_cam, -up_world)
+            x_cam /= np.linalg.norm(x_cam)
+            y_cam = np.cross(z_cam, x_cam)
+            R_cam = np.column_stack([x_cam, y_cam, z_cam])
+            Q_cam = tuple(transforms3d.quaternions.mat2quat(R_cam))
+
+            mock_cam = MockCam(pos_cam, Q_cam)
+            self.ui._sync_hud_to_camera(mock_cam)
+
+            # Quy đổi ngược vị trí HUD thế giới về hệ tọa độ Camera Viewport:
+            p_hud_world = np.array(self.ui._hud_frame.position)
+            p_in_cam = R_cam.T @ (p_hud_world - pos_cam)
+
+            # Tọa độ trong Camera Viewport luôn phải dính chặt [s_right, s_down, d_fwd] = [0.20, 0.14, 0.50]
+            np.testing.assert_allclose(p_in_cam, [0.20, 0.14, 0.50], atol=1e-5,
+                                       err_msg=f"HUD bi lech khoi goc man hinh tai goc xoay {deg} do")
 
 if __name__ == "__main__":
     unittest.main()

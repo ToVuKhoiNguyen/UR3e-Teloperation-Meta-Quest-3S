@@ -182,10 +182,21 @@ class TeleopViserUI:
         # 2. Target widget wrapper điều khiển Gizmo (cách ly 100% với 3D HUD)
         self.target_widget = TargetWidgetWrapper(self._raw_gizmo)
 
-        # 3. Tạo Node 3D HUD (mặc định tại góc phải bàn máy, an toàn không che robot)
+        # 3. Tạo Node 3D HUD (Camera Space Viewport HUD cố định góc màn hình)
+        self._hud_mode = "viewport"
+        self._active_camera = None
         self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
-        self._hud_base_wxyz = (0.1464466, 0.3535534, -0.8535534, -0.3535534)
+
+        # Ma trận xoay upright dựng đứng đối diện người dùng trong Camera Space (Pitch -75 deg, Yaw -15 deg)
+        self._r_hud_upright = np.array([
+            [ 0.96592583,  0.25,       -0.0669873  ],
+            [ 0.0,         0.25881905,  0.96592583 ],
+            [ 0.25881905, -0.9330127,   0.25       ]
+        ], dtype=float)
+        self._q_hud_upright = (0.7865661, -0.6035534, -0.1035534, -0.0794593)
+        self._hud_base_wxyz = self._q_hud_upright
         self._init_ctrl_wxyz = self._hud_base_wxyz
+
         self._hud_frame = self.server.scene.add_frame(
             "vr_controller_hud",
             position=tuple(self._hud_base_pos),
@@ -194,17 +205,17 @@ class TeleopViserUI:
         )
         self._ctrl_frame = self._hud_frame  # Giữ alias cho backward-compatibility
 
-
-        # Quản lý chế độ HUD (Viewport góc màn hình vs Fixed World góc bàn máy)
-        self._hud_mode = "fixed_world"
         self._client_cameras = {}
 
         @self.server.on_client_connect
         def _(client: viser.ClientHandle):
             self._client_cameras[client.client_id] = client.camera
+            self._active_camera = client.camera
+            self._sync_hud_to_camera(client.camera)
             @client.camera.on_update
             def _(cam):
                 if self._hud_mode == "viewport":
+                    self._active_camera = cam
                     self._sync_hud_to_camera(cam)
 
         # 4. Nạp mô hình 3D tay cầm Meta Quest 3/3S gắn vào vr_controller_hud:
@@ -404,29 +415,29 @@ class TeleopViserUI:
     def set_grasp_state(self, is_grasped: bool):
         self.ui_grasp_state.value = "Holding" if is_grasped else "Empty"
 
-    def _sync_hud_to_camera(self, cam):
-        """Tính toán neo 3D HUD cố định tại góc dưới bên phải màn hình theo camera hiện tại"""
+    def _calc_hud_pose_from_cam(self, cam_pos, cam_wxyz):
+        """Tính toán neo vị trí và hướng quay của 3D HUD theo Camera Space"""
         try:
-            r_cam = transforms3d.quaternions.quat2mat(cam.wxyz)
-            # Quy ước OpenCV của Viser: +X right, +Y down, +Z fwd
+            r_cam = transforms3d.quaternions.quat2mat(cam_wxyz)
+            # OpenCV camera convention: +X right, +Y down, +Z fwd
             u_right = r_cam[:, 0]
             u_down = r_cam[:, 1]
             u_fwd = r_cam[:, 2]
 
-            # Đặt cách camera 0.55m, lệch phải 0.20m, lệch xuống 0.14m
-            d_fwd = 0.55
+            d_fwd = 0.50
             s_right = 0.20
             s_down = 0.14
-            self._hud_base_pos = np.array(cam.position) + d_fwd * u_fwd + s_right * u_right + s_down * u_down
-
-            # Hướng mặt điều khiển tay cầm đứng thẳng tự nhiên (nghiêng 15 độ về phía camera)
-            r_tilt = np.array([
-                [1.0,  0.0,     0.0],
-                [0.0,  0.2588,  0.9659],
-                [0.0, -0.9659,  0.2588]
-            ], dtype=float)
-            r_base = r_cam @ r_tilt
+            self._hud_base_pos = np.array(cam_pos) + d_fwd * u_fwd + s_right * u_right + s_down * u_down
+            r_base = r_cam @ self._r_hud_upright
             self._hud_base_wxyz = tuple(transforms3d.quaternions.mat2quat(r_base))
+            self._r_cam_current = r_cam
+        except Exception:
+            pass
+
+    def _sync_hud_to_camera(self, cam):
+        """Tính toán neo 3D HUD cố định tại góc dưới bên phải màn hình theo camera hiện tại"""
+        try:
+            self._calc_hud_pose_from_cam(cam.position, cam.wxyz)
             if not hasattr(self, "_current_ctrl_mode") or self._current_ctrl_mode == "idle":
                 self._hud_frame.position = tuple(self._hud_base_pos)
                 self._hud_frame.wxyz = self._hud_base_wxyz
@@ -478,6 +489,17 @@ class TeleopViserUI:
             for mode, h in self._ctrl_handles.items():
                 h.visible = (mode == target_mode)
 
+        # Luôn đảm bảo đồng bộ góc nhìn camera client mới nhất nếu có
+        if self._hud_mode == "viewport":
+            if self._active_camera is not None:
+                self._calc_hud_pose_from_cam(self._active_camera.position, self._active_camera.wxyz)
+            else:
+                clients = self.server.get_clients()
+                if clients:
+                    c = next(iter(clients.values()))
+                    self._active_camera = c.camera
+                    self._calc_hud_pose_from_cam(c.camera.position, c.camera.wxyz)
+
         # 2. Quản lý góc xoay tay cầm (Quaternion Sync)
         if vr_quat is not None and len(vr_quat) == 4:
             try:
@@ -486,7 +508,9 @@ class TeleopViserUI:
                 if norm_q > 1e-4:
                     q /= norm_q
                     r_wrist = transforms3d.quaternions.quat2mat(q)
-                    if hasattr(self, "_hud_base_wxyz"):
+                    if hasattr(self, "_r_cam_current"):
+                        r_hud = self._r_cam_current @ self._r_hud_upright @ r_wrist
+                    elif hasattr(self, "_hud_base_wxyz"):
                         r_base = transforms3d.quaternions.quat2mat(self._hud_base_wxyz)
                         r_hud = r_base @ r_wrist
                     else:
@@ -504,11 +528,17 @@ class TeleopViserUI:
                 d_lat = float(delta_trans[1])
                 d_vert = float(delta_trans[2])
                 alpha_micro = 0.20
-                disp = np.array([
-                    -0.7071 * d_fwd + 0.7071 * d_lat,
-                     0.7071 * d_fwd + 0.7071 * d_lat,
-                     d_vert
-                ], dtype=float) * alpha_micro
+                if hasattr(self, "_r_cam_current"):
+                    u_right = self._r_cam_current[:, 0]
+                    u_down = self._r_cam_current[:, 1]
+                    u_fwd = self._r_cam_current[:, 2]
+                    disp = (d_lat * u_right - d_vert * u_down + d_fwd * u_fwd) * alpha_micro
+                else:
+                    disp = np.array([
+                        -0.7071 * d_fwd + 0.7071 * d_lat,
+                         0.7071 * d_fwd + 0.7071 * d_lat,
+                         d_vert
+                    ], dtype=float) * alpha_micro
                 disp_norm = np.linalg.norm(disp)
                 if disp_norm > 0.025:
                     disp = disp * (0.025 / disp_norm)
