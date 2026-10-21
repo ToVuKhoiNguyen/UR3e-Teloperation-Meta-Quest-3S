@@ -200,7 +200,7 @@ def register_ui_callbacks(
             if pose_source is not None and abs(pose_source.scale - new_scale) > 1e-3:
                 pose_source.scale = new_scale
             latency_ms = (time.perf_counter() - t0) * 1000.0
-            print(f"[Viser UI Event] Điều chỉnh độ nhạy (Scale): {new_scale:.2f} (Độ trễ: {latency_ms:.2f}ms)")
+            print(f"[Viser UI Event] Điều chỉnh độ nhạy (Scale): {new_scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="UR3e WebXR Teleoperation")
@@ -295,7 +295,7 @@ def main():
     teleop._last_valid_q = list(start_joints)
 
     pose_source = DeltaPoseSource(
-        quest_server, ctrl, scale=0.75,
+        quest_server, ctrl, scale=1.0,
         anchor_reference_func=lambda: get_robot_fk_as_ur(teleop, ctrl),
         alpha=0.28,
         max_delta_m=0.22
@@ -442,7 +442,7 @@ def main():
             t_stick = time.perf_counter()
             # Cần đẩy lên (stick_y < -0.35): Tăng độ nhạy; Kéo xuống (stick_y > 0.35): Giảm độ nhạy
             d_scale = -stick_y * 0.4 * POLL_SLEEP
-            new_scale = float(np.clip(pose_source.scale + d_scale, 0.1, 2.0))
+            new_scale = float(np.clip(pose_source.scale + d_scale, 0.25, 3.0))
             if abs(new_scale - pose_source.scale) > 0.005:
                 pose_source.scale = round(new_scale, 2)
                 if hasattr(ui, "slider_sensitivity") and ui.slider_sensitivity is not None:
@@ -450,7 +450,7 @@ def main():
                 latency_ms = (time.perf_counter() - t_stick) * 1000.0
                 if time.time() - _last_scale_log_time > 0.4:
                     _last_scale_log_time = time.time()
-                    print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {pose_source.scale:.2f} (Độ trễ: {latency_ms:.2f}ms)")
+                    print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {pose_source.scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
         # C. Xử lý Nút B (hoặc Y trên tay trái):
         # - Nếu đang bóp Grip + ấn Nút B -> Hiệu chuẩn bàn máy (Grip + B combo)

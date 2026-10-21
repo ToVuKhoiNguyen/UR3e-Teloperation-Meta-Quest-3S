@@ -368,10 +368,10 @@ class TeleopViserUI:
             # 4. Thanh trượt tinh chỉnh độ nhạy di chuyển (Scale) theo thời gian thực
             self.slider_sensitivity = self.server.gui.add_slider(
                 "Độ nhạy di chuyển (Scale)",
-                min=0.1,
-                max=2.0,
+                min=0.25,
+                max=3.0,
                 step=0.05,
-                initial_value=0.75
+                initial_value=1.0
             )
 
         # Thư mục điều khiển hiển thị 3D: Gizmo và Tay Cầm trên cùng một hàng ngang

@@ -10,10 +10,10 @@ class DeltaPoseSource:
     Implements PoseSource contract.
     Chuyển delta tọa độ từ kính Quest sang base_link của UR3e.
     """
-    def __init__(self, server, ctrl, scale: float = 0.75, max_delta_m: float = 0.22, anchor_reference_func=None, alpha: float = 0.28):
+    def __init__(self, server, ctrl, scale: float = 1.0, max_delta_m: float = 0.22, anchor_reference_func=None, alpha: float = 0.28):
         self.server = server
         self.ctrl = ctrl
-        self.scale = float(os.environ.get("TELEOP_SCALE", str(scale)))
+        self.sensitivity_scale = float(os.environ.get("TELEOP_SCALE", str(scale if scale is not None else 1.0)))
         self.max_delta_m = float(os.environ.get("MAX_DELTA_M", str(max_delta_m)))
         self.anchor_reference_func = anchor_reference_func
         self.alpha = float(os.environ.get("TELEOP_ALPHA", str(alpha)))
@@ -71,6 +71,14 @@ class DeltaPoseSource:
                 self.server.set_q0_provider(lambda: self.ctrl.joints()[0] if self.ctrl is not None and hasattr(self.ctrl, "joints") and self.ctrl.joints() is not None else None)
             except Exception:
                 pass
+
+    @property
+    def scale(self):
+        return self.sensitivity_scale
+
+    @scale.setter
+    def scale(self, val):
+        self.sensitivity_scale = float(val)
 
     def _apply_aggressive_axis_isolation(self, delta_vec):
         """
@@ -399,6 +407,11 @@ class DeltaPoseSource:
                 d_lateral = d_lateral_raw
                 d_vertical = d_vertical_raw
 
+            # Áp dụng hệ số độ nhạy SAU bộ lọc deadband/damping để bảo toàn 100% ngưỡng lọc và hành vi chống rung
+            d_forward  *= self.sensitivity_scale
+            d_lateral  *= self.sensitivity_scale
+            d_vertical *= self.sensitivity_scale
+
             cm_fwd = d_forward * 100.0
             cm_lat = d_lateral * 100.0
             cm_vert = d_vertical * 100.0
@@ -431,7 +444,7 @@ class DeltaPoseSource:
                 # 1. Sang Phải / Sang Trái -> Chỉ xoay kim đồng hồ (khớp đế q0) quanh Base Z:
                 # - Sang Phải (d_lateral > 0) -> q0 giảm (quay theo chiều kim đồng hồ)
                 # - Sang Trái (d_lateral < 0) -> q0 tăng (quay ngược chiều kim đồng hồ)
-                delta_arc = d_lateral * self.scale
+                delta_arc = d_lateral
                 delta_arc = np.clip(delta_arc, -self.max_delta_m, self.max_delta_m)
                 delta_q0 = -delta_arc / max(r_reach, 0.12)
                 delta_q0 = np.clip(delta_q0, -0.65, 0.65)  # Khống chế góc quay tối đa ~37 độ / lần bóp cò
@@ -464,7 +477,7 @@ class DeltaPoseSource:
                 delta_reach = np.clip(delta_reach, -self.max_delta_m, self.max_delta_m)
 
                 # 3. Lên / Xuống -> Nâng hạ chiều cao Z:
-                delta_z = d_vertical * self.scale
+                delta_z = d_vertical
                 delta_z = np.clip(delta_z, -self.max_delta_m, self.max_delta_m)
                 z_target = np.clip(p_anc[2] + delta_z, 0.00, 0.58)
 
@@ -496,7 +509,7 @@ class DeltaPoseSource:
                 dx_robot = d_forward * np.cos(theta_arm) + d_lateral * np.sin(theta_arm)
                 dy_robot = d_forward * np.sin(theta_arm) - d_lateral * np.cos(theta_arm)
                 dz_robot = d_vertical
-                delta_robot_world = np.array([dx_robot, dy_robot, dz_robot]) * self.scale
+                delta_robot_world = np.array([dx_robot, dy_robot, dz_robot])
                 delta_robot_world = np.clip(delta_robot_world, -self.max_delta_m, self.max_delta_m)
                 target_pos = self._anchor_tcp[:3] + delta_robot_world
                 self._current_delta_theta = 0.0
@@ -505,7 +518,7 @@ class DeltaPoseSource:
                     d_forward,
                     -d_lateral,
                     d_vertical
-                ]) * self.scale
+                ])
                 delta_robot_world = np.clip(delta_robot_world, -self.max_delta_m, self.max_delta_m)
                 target_pos = self._anchor_tcp[:3] + delta_robot_world
                 self._current_delta_theta = 0.0
