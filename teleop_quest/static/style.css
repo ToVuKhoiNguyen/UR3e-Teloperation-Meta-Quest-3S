@@ -86,12 +86,8 @@ button {
     pointer-events: none !important;
 }
 
-/* Cho phép các nút chức năng trên thanh tiêu đề đón nhận click nếu người dùng trỏ thẳng vào */
-#vr-overlay.drive-mode #btn-toggle-ui,
-#vr-overlay.drive-mode #btn-home-vr,
+/* Cho phép nút Exit VR trên thanh tiêu đề đón nhận click nếu người dùng trỏ thẳng vào */
 #vr-overlay.drive-mode #btn-exit-vr,
-#cockpit-panel.drive-mode #btn-toggle-ui,
-#cockpit-panel.drive-mode #btn-home-vr,
 #cockpit-panel.drive-mode #btn-exit-vr {
     pointer-events: auto !important;
 }

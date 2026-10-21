@@ -254,88 +254,19 @@
             }
         });
 
-        // Quản lý chuyển đổi giữa Edit Mode (chỉnh UI) và Drive Mode (lái Robot)
+        // Quản lý trạng thái: Khóa cố định Drive Mode để điều khiển Robot thông suốt
         let uiLocked = true;
-        const btnToggleUI = document.getElementById('btn-toggle-ui');
         const cockpitPanel = document.getElementById('cockpit-panel');
+        const overlay = document.getElementById('vr-overlay');
+        if (cockpitPanel) cockpitPanel.classList.add('drive-mode');
+        if (overlay) overlay.classList.add('drive-mode');
 
-        function setDriveMode(locked, notifyServer = true) {
-            uiLocked = Boolean(locked);
-            const overlay = document.getElementById('vr-overlay');
-
-            if (uiLocked) {
-                if (cockpitPanel) cockpitPanel.classList.add('drive-mode');
-                if (overlay) overlay.classList.add('drive-mode');
-                btnToggleUI.innerHTML = '<span></span> Unlock UI (Edit Mode) [B/Y]';
-                btnToggleUI.style.background = '#10b981';
-                if (elValMode) {
-                    elValMode.innerText = "Drive Mode";
-                    elValMode.className = "badge green";
-                }
-            } else {
-                if (cockpitPanel) cockpitPanel.classList.remove('drive-mode');
-                if (overlay) overlay.classList.remove('drive-mode');
-                btnToggleUI.innerHTML = '<span></span> Lock UI (Drive Mode) [B/Y]';
-                btnToggleUI.style.background = '#f59e0b';
-                if (elValMode) {
-                    elValMode.innerText = "Edit Mode";
-                    elValMode.className = "badge orange";
-                }
-            }
-
-            // Đồng bộ trạng thái lên Python server
-            if (notifyServer && ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'ui_state',
-                    drive_mode: uiLocked
-                }));
-            } else if (notifyServer) {
-                fetch(`/api/drive_mode?state=${uiLocked}`).catch(() => {});
-            }
-        }
-
-        btnToggleUI.addEventListener('click', (e) => {
-            e.stopPropagation();
-            setDriveMode(!uiLocked, true);
-        });
-
-        const btnHomeVR = document.getElementById('btn-home-vr');
-        if (btnHomeVR) {
-            btnHomeVR.addEventListener('click', (e) => {
-                e.stopPropagation();
-                triggerGoHome(activeSource);
-            });
-        }
-
-        let lastThumbstickPressed = false;
-        let btnBPressStartTime = 0;
-        let btnBLongTriggered = false;
-        let lastHomeSentTime = 0;
-
-        function triggerGoHome(source) {
-            let now = Date.now();
-            if (now - lastHomeSentTime < 2000) return;
-            lastHomeSentTime = now;
-            console.log("[WebXR] Go Home command triggered from VR Controller!");
-            if (source && source.gamepad && source.gamepad.hapticActuators && source.gamepad.hapticActuators.length > 0) {
-                source.gamepad.hapticActuators[0].pulse(1.0, 300);
-                setTimeout(() => {
-                    if (source.gamepad.hapticActuators.length > 0) source.gamepad.hapticActuators[0].pulse(0.8, 200);
-                }, 350);
-            }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'go_home', home: true, thumbstick_click: true }));
-            } else {
-                fetch('/api/go_home').catch(() => {});
-            }
-            let elHome = document.getElementById('val-home-btn');
-            if (elHome) {
-                elHome.innerText = "Returning Home...";
-                elHome.className = "badge green";
-                setTimeout(() => {
-                    elHome.innerText = "Thumbstick / Hold B (>3s)";
-                    elHome.className = "badge gray";
-                }, 4000);
+        function setDriveMode(locked, notifyServer = false) {
+            uiLocked = true;
+            if (cockpitPanel) cockpitPanel.classList.add('drive-mode');
+            if (overlay) overlay.classList.add('drive-mode');
+            if (notifyServer) {
+                fetch(`/api/drive_mode?state=true`).catch(() => {});
             }
         }
 
@@ -441,66 +372,29 @@
                     let gripPressed = false;
                     let gripperRawPressed = false;
                     let gripperBtnPressed = false;
-                    let driveTogglePressed = false;
-                    let thumbstickPressed = false;
+                    let btnBPressed = false;
                     
                     if (activeSource.gamepad && activeSource.gamepad.buttons) {
                         // Button 0: Index Trigger (bóp trỏ - tịnh tiến)
                         if (activeSource.gamepad.buttons.length > 0) triggerPressed = activeSource.gamepad.buttons[0].pressed;
                         // Button 1: Hand Grip (bóp hông - xoay)
                         if (activeSource.gamepad.buttons.length > 1) gripPressed = activeSource.gamepad.buttons[1].pressed;
-                        // Button 3: Thumbstick Click (nhấn cần gạt Analog) -> Lệnh Go Home
-                        if (activeSource.gamepad.buttons.length > 3) thumbstickPressed = activeSource.gamepad.buttons[3].pressed;
                         // Button 4: Nút A (tay phải) hoặc Nút X (tay trái) - Kẹp/Nhả Gripper
                         if (activeSource.gamepad.buttons.length > 4) gripperRawPressed = activeSource.gamepad.buttons[4].pressed;
-                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Phím cứng chuyển đổi Drive Mode hoặc Giữ để Go Home
-                        if (activeSource.gamepad.buttons.length > 5) driveTogglePressed = activeSource.gamepad.buttons[5].pressed;
+                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Hiệu chuẩn bàn máy
+                        if (activeSource.gamepad.buttons.length > 5) btnBPressed = activeSource.gamepad.buttons[5].pressed;
                     }
 
-                    // 1. Xử lý Thumbstick Click (nhấn cần gạt analog R3): Kích hoạt Go Home tức thì
-                    if (thumbstickPressed && !lastThumbstickPressed) {
-                        triggerGoHome(activeSource);
-                    }
-                    lastThumbstickPressed = thumbstickPressed;
-
-                    // 2. Xử lý nút B / Y:
-                    // - Bấm nhả nhanh (< 3 giây): Bật / Tắt Drive Mode
-                    // - Nhấn giữ lâu (> 3 giây): Kích hoạt Go Home
-                    if (driveTogglePressed) {
-                        if (btnBPressStartTime === 0) {
-                            btnBPressStartTime = Date.now();
-                            btnBLongTriggered = false;
-                        } else if (Date.now() - btnBPressStartTime > 3000 && !btnBLongTriggered) {
-                            btnBLongTriggered = true;
-                            triggerGoHome(activeSource);
-                        }
-                    } else {
-                        if (btnBPressStartTime > 0) {
-                            if (!btnBLongTriggered) {
-                                setDriveMode(!uiLocked, true);
-                                if (activeSource.gamepad && activeSource.gamepad.hapticActuators && activeSource.gamepad.hapticActuators.length > 0) {
-                                    activeSource.gamepad.hapticActuators[0].pulse(0.7, 120);
-                                }
-                            }
-                            btnBPressStartTime = 0;
-                            btnBLongTriggered = false;
-                        }
-                    }
-
-                    // 3. Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nhấn cần gạt L3 hoặc nút X)
+                    // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nút X)
                     for (let s of session.inputSources) {
                         if (s !== activeSource && s.gamepad && s.gamepad.buttons) {
-                            if (s.gamepad.buttons.length > 3 && s.gamepad.buttons[3].pressed) {
-                                triggerGoHome(s);
-                                thumbstickPressed = true;
-                            }
                             if (s.gamepad.buttons.length > 4 && s.gamepad.buttons[4].pressed) {
                                 gripperRawPressed = true;
                             }
                         }
                     }
 
-                    // 4. Xử lý cơ chế Toggle Gripper (Bấm 1 lần để kẹp/hút, bấm lần nữa để thả)
+                    // Xử lý cơ chế Toggle Gripper (Bấm 1 lần để kẹp/hút, bấm lần nữa để thả)
                     let gripperToggleTriggered = false;
                     if (gripperRawPressed && !lastGripperRawPressed) {
                         gripperToggleTriggered = true;
@@ -544,39 +438,41 @@
                         gripper_toggle_btn: gripperToggleTriggered,
                         gripper_btn: gripperBtnPressed,
                         button_a: gripperRawPressed,
-                        button_b: driveTogglePressed,
-                        thumbstick: thumbstickPressed || stickTilted,
-                        thumbstick_click: thumbstickPressed,
+                        button_b: btnBPressed,
+                        thumbstick: stickTilted,
+                        thumbstick_click: false,
                         joystick_tilt: stickTilted,
-                        home: thumbstickPressed,
-                        drive_mode: uiLocked
+                        home: false,
+                        drive_mode: true
                     }));
                     
                     let handName = activeSource.handedness === 'right' ? "Right Hand" : (activeSource.handedness === 'left' ? "Left Hand" : "Unknown");
                     
-                    // Cập nhật dữ liệu lên URSim Layout
-                    elValSource.innerText = handName;
-                    elValSource.style.color = "#10b981";
-                    elValSource.style.fontWeight = "bold";
-                    
-                    elValTrigger.innerText = triggerPressed ? "Pressed" : "Released";
-                    elValTrigger.className = triggerPressed ? "badge red" : "badge gray";
-                    
-                    elValGrip.innerText = gripPressed ? "Pressed" : "Released";
-                    elValGrip.className = gripPressed ? "badge red" : "badge gray";
-
+                    // Cập nhật dữ liệu nếu các phần tử cũ còn tồn tại
+                    if (elValSource) {
+                        elValSource.innerText = handName;
+                        elValSource.style.color = "#10b981";
+                        elValSource.style.fontWeight = "bold";
+                    }
+                    if (elValTrigger) {
+                        elValTrigger.innerText = triggerPressed ? "Pressed" : "Released";
+                        elValTrigger.className = triggerPressed ? "badge red" : "badge gray";
+                    }
+                    if (elValGrip) {
+                        elValGrip.innerText = gripPressed ? "Pressed" : "Released";
+                        elValGrip.className = gripPressed ? "badge red" : "badge gray";
+                    }
                     if (elValGripperBtn) {
                         elValGripperBtn.innerText = gripperBtnPressed ? "Closed (Suction ON)" : "Open (Suction OFF)";
                         elValGripperBtn.className = gripperBtnPressed ? "badge red" : "badge gray";
                     }
                     
-                    // elValX, Y, Z, Qx, Qy, Qz, Qw được cập nhật tự động từ luồng telemetry của Robot thực tế (20Hz)
                     sentData = true;
                 }
             }
 
             // Ghi log để debug nếu không có tay cầm nào được nhận diện
-            if (!sentData) {
+            if (!sentData && elValSource) {
                 elValSource.innerText = "Waiting...";
                 elValSource.style.color = "#64748b";
                 elValSource.style.fontWeight = "normal";

@@ -115,11 +115,8 @@ class QuestServer:
             return False
 
     def check_and_clear_home(self) -> bool:
-        with self._lock:
-            if self._home_requested:
-                self._home_requested = False
-                return True
-            return False
+        # Tính năng Go Home từ VR Controller đã bị loại bỏ theo yêu cầu
+        return False
 
     def check_and_clear_gripper_toggle(self) -> bool:
         with self._lock:
@@ -347,13 +344,11 @@ class QuestServer:
 
                 # 4. REST Endpoints hỗ trợ điều khiển khi WebSocket bị giới hạn
                 if req_path == "/api/go_home":
-                    with server_self._lock:
-                        server_self._home_requested = True
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    self.wfile.write(b'{"status": "ok"}')
+                    self.wfile.write(b'{"status": "disabled"}')
                     return
 
                 if req_path == "/api/toggle_gripper":
@@ -419,20 +414,13 @@ class QuestServer:
                             if data.get("type") == "estop":
                                 self._estop_triggered = True
                             elif data.get("type") == "ui_state":
-                                self._drive_mode = bool(data.get("drive_mode", False))
-                            elif data.get("type") == "go_home":
-                                self._home_requested = True
-                                if self._latest_frame is not None:
-                                    self._latest_frame["home"] = True
-                                    self._latest_frame["thumbstick_click"] = True
+                                self._drive_mode = True
                             elif data.get("type") == "toggle_gripper":
                                 self._gripper_toggle_requested = True
                             else:
                                 self._latest_frame = data
                                 self._last_seen = time.time()
                                 self._connected = True
-                                if data.get("home_btn") or data.get("home") or data.get("thumbstick_click"):
-                                    self._home_requested = True
                                 if data.get("gripper_toggle_btn"):
                                     self._gripper_toggle_requested = True
                                 # Đồng bộ tức thời trạng thái tay cầm vào telemetry cache để HTTP polling cập nhật nhạy

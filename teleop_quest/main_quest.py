@@ -275,30 +275,7 @@ def main():
             ui.set_status("EMERGENCY STOP (Từ VR)!")
             quest_server.send_haptic(1.0, 1000)
 
-        # B. Kiểm tra lệnh Go Home từ tay cầm VR
-        if quest_server.check_and_clear_home():
-            if not is_navigating_home.is_set():
-                print("[Quest] Nhận lệnh Go Home từ tay cầm VR! Bắt đầu đưa robot về Home an toàn...")
-                ui.set_status("Returning Home (Từ VR)...")
-                is_navigating_home.set()
-                teleop.enabled = False
-                ui.cb_teleop.value = False
-                quest_server.send_haptic(1.0, 300)
-                ui.update_controller_visual(is_home=True)
-                threading.Thread(
-                    target=home_planner.go_home,
-                    args=(
-                        teleop, executor, ctrl, ui.target_widget,
-                        widget_pose_source, ui.ui_status, ui.cb_teleop
-                    ),
-                    kwargs={
-                        "is_navigating_home": is_navigating_home,
-                        "poll_sleep": POLL_SLEEP,
-                        "quest_server": quest_server
-                    },
-                    daemon=True
-                ).start()
-                continue
+
 
         # C. Cập nhật trạng thái kết nối
         ui.set_connected(quest_server.is_connected())
@@ -361,7 +338,7 @@ def main():
         _is_grip = bool(vr_frame.get("grip", False)) if vr_frame else False
         _is_btn_b = bool(vr_frame.get("button_b", False) or vr_frame.get("button_y", False)) if vr_frame else False
         _is_joy_tilt = bool(vr_frame.get("joystick_tilt", False)) if vr_frame else False
-        _is_home = is_navigating_home.is_set() or (bool(vr_frame.get("thumbstick_click", False) or vr_frame.get("home", False)) if vr_frame else False)
+        _is_home = is_navigating_home.is_set()
         if vr_frame and vr_frame.get("thumbstick", False) and not _is_home and not _is_joy_tilt:
             _is_joy_tilt = True
 
