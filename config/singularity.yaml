@@ -1,6 +1,6 @@
 logging:
   format: parquet
-  output_dir: /home/nguyen/ur_ws/curobo_ursim/logs/singularity_data
+  output_dir: /home/nguyen/ur_ws/pyroki_ursim/logs/singularity_data
 robot:
   model_file: ur3e.yml
   name: ur3e

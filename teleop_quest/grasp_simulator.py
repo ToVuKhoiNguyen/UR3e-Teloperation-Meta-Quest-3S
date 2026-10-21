@@ -59,7 +59,7 @@ class GraspSimulator:
 
     def update(self, tool_pos: list, grip_pressed: bool) -> Tuple[bool, Optional[str]]:
         """
-        Cập nhật logic gắp thả theo vị trí đầu gắp TCP (CuRobo world) và trạng thái nút Grip.
+        Cập nhật logic gắp thả theo vị trí đầu gắp TCP (robot world) và trạng thái nút Grip.
         Trả về: (is_grasped, event_message)
         """
         tool_p = np.array(tool_pos[:3], dtype=np.float32)

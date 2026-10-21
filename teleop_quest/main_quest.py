@@ -46,7 +46,6 @@ from teleop_quest.bootstrap import (
 
 POLL_SLEEP = 0.05
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ROBOT_CONFIG = os.path.join(BASE_DIR, "assets", "ur3e_custom.yml")
 SCENE_CONFIG = os.path.join(BASE_DIR, "assets", "obstacle_scene.yml")
 SAFE_HOME_JOINTS = [0.0, -2.2, 1.9, -1.383, -1.57, 0.0]
 
@@ -179,7 +178,6 @@ def main():
 
     # 5. Khởi tạo Giao diện Viser 3D, Grasp Simulator và Camera Pipeline
     ui = TeleopViserUI(
-        ROBOT_CONFIG,
         init_pos=robot_init_pos,
         init_quat=robot_init_quat,
         init_joints=start_joints,
@@ -221,7 +219,7 @@ def main():
 
     watchdog = TimeoutWatchdog(quest_server, executor)
     watchdog.start()
-    home_planner = HomePlanner(ROBOT_CONFIG, SCENE_CONFIG, ui.viz, default_home_q=SAFE_HOME_JOINTS)
+    home_planner = HomePlanner(scene_file=SCENE_CONFIG, viz=ui.viz, default_home_q=SAFE_HOME_JOINTS)
 
     is_navigating_home = threading.Event()
     register_ui_callbacks(

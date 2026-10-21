@@ -41,7 +41,7 @@ class HomePlanner:
       - Tạo quỹ đạo không gian khớp an toàn (nâng bắp tay tránh va chạm bàn, sau đó xoay về Home)
       - Thực thi mượt mà qua bộ sinh quỹ đạo phần cứng 500Hz movej của URScript
     """
-    def __init__(self, robot_config_path: str = None, scene_file: str = None, viz = None, default_home_q: list = None):
+    def __init__(self, scene_file: str = None, viz = None, default_home_q: list = None):
         self.viz = viz
         # Vị trí Home an toàn chuẩn của UR3e (khuỷu tay cong tự nhiên, Z=33cm, tuyệt đối không tự va chạm)
         self.default_home_q = list(default_home_q) if default_home_q is not None else [0.0, -2.2, 1.9, -1.383, -1.57, 0.0]

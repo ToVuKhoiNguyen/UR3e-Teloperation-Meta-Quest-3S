@@ -206,7 +206,7 @@ print("=" * 90)
 candidates = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..", "quest_run2.jsonl"),
     "quest_run2.jsonl",
-    "/home/nguyen/ur_ws/curobo_ursim/quest_run2.jsonl"
+    "/home/nguyen/ur_ws/pyroki_ursim/quest_run2.jsonl"
 ]
 jsonl_path = None
 for p in candidates:

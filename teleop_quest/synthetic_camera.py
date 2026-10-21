@@ -31,8 +31,8 @@ class SyntheticWristCamera:
     ) -> np.ndarray:
         """
         Render khung cảnh 3D từ góc nhìn của TCP sang ảnh RGB (uint8).
-        tool_pos/tcp_pose: [x, y, z] trong hệ tọa độ CuRobo world (hoặc [x, y, z, rx, ry, rz] nếu cũ)
-        tool_quat: [w, x, y, z] Quaternion từ CuRobo FK (hoặc None nếu truyền tcp_pose cũ)
+        tool_pos/tcp_pose: [x, y, z] trong hệ tọa độ robot world (hoặc [x, y, z, rx, ry, rz] nếu cũ)
+        tool_quat: [w, x, y, z] Quaternion từ PyRoki FK (hoặc None nếu truyền tcp_pose cũ)
         """
         if tool_pos is None and tcp_pose is not None:
             tool_pos = tcp_pose
@@ -48,7 +48,7 @@ class SyntheticWristCamera:
         pos_cam = np.array(tool_pos[:3], dtype=np.float32)
 
         if tool_quat is not None and len(tool_quat) == 4:
-            # CuRobo FK Quaternion: [w, x, y, z]
+            # PyRoki FK Quaternion: [w, x, y, z]
             R_world_tool = transforms3d.quaternions.quat2mat(tool_quat)
         elif tool_quat is not None and len(tool_quat) == 3:
             rot_axis = np.array(tool_quat, dtype=np.float32)
@@ -61,7 +61,7 @@ class SyntheticWristCamera:
         else:
             R_world_tool = np.eye(3)
 
-        # Trong hệ CuRobo UR3e: Trục Z của tool0 chúc thẳng xuống mặt bàn (-Z_world).
+        # Trong hệ robot UR3e: Trục Z của tool0 chúc thẳng xuống mặt bàn (-Z_world).
         # Camera quang học (OpenCV): +Z là tia nhìn thẳng ra ngoài thấu kính,
         # +X sang phải ảnh, +Y hướng xuống ảnh (về phía thân robot).
         # R_cam_world = R_world_tool^T đưa vector từ World sang Camera frame.

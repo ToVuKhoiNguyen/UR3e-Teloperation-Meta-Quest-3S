@@ -2,7 +2,7 @@
 """
 Script kiểm tra toàn diện quy trình Mô phỏng Gắp Cà chua 3D + Camera ảo + Ghi HDF5.
 Cách chạy:
-  /home/nguyen/curobo/.venv/bin/python test_simulated_pick_and_place.py
+  python tests/test_simulated_pick_and_place.py
 """
 
 import sys

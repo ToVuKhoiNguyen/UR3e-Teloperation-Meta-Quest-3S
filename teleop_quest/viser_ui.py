@@ -149,7 +149,6 @@ class TeleopViserUI:
     """
     def __init__(
         self,
-        robot_config_path: str,
         init_pos: list,
         init_quat: list,
         init_joints: list,

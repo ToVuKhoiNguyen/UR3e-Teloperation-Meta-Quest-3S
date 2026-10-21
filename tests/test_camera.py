@@ -4,10 +4,10 @@ Script kiểm tra Wrist Camera mô phỏng (Synthetic Wrist Camera) và kiểm t
 
 Cách chạy:
   1. Chế độ kiểm tra nhanh (Render & lưu 4 góc độ ảnh vào logs/):
-     /home/nguyen/curobo/.venv/bin/python test_camera.py
+     python tests/test_camera.py
 
   2. Chế độ giao diện Web trực quan (kéo thanh trượt di chuyển cà chua trực tiếp):
-     /home/nguyen/curobo/.venv/bin/python test_camera.py --gui
+     python tests/test_camera.py --gui
 """
 
 import os
@@ -31,7 +31,7 @@ def test_camera_render():
     # 1. Khởi tạo Camera ảo (RealSense D435i - 640x480, FOV 65 độ)
     cam = SyntheticWristCamera(width=640, height=480, fov_deg=65.0)
 
-    # Giả định đầu gắp robot đang ở vị trí Home chuẩn CuRobo:
+    # Giả định đầu gắp robot đang ở vị trí Home an toàn chuẩn UR3e:
     # [x=0.136, y=0.327, z=0.120] (hướng nhìn thẳng xuống mặt bàn)
     tool_pos = [0.1357, 0.3270, 0.1200]
     tool_quat = [0.01244, 0.99984, 0.00039, -0.01254] # [w, x, y, z]
