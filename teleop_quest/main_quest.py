@@ -246,6 +246,9 @@ def main():
     _gripper_active = False
     _last_vr_gripper_raw = False
     _last_viser_cb_val = False
+    _last_btn_b_state = False
+    _last_trig_state = False
+    _last_grip_state = False
 
     # 8. Vòng lặp điều khiển chính (20Hz)
     while True:
@@ -275,12 +278,37 @@ def main():
             ui.set_status("EMERGENCY STOP (Từ VR)!")
             quest_server.send_haptic(1.0, 1000)
 
+        # B. Đọc trạng thái từ kính Quest
+        vr_frame = quest_server.get_frame()
+        _is_trig = bool(vr_frame.get("trigger", False)) if vr_frame else False
+        _is_grip = bool(vr_frame.get("grip", False)) if vr_frame else False
+        _is_btn_b = bool(vr_frame.get("button_b", False) or vr_frame.get("button_y", False)) if vr_frame else False
+        _is_joy_tilt = bool(vr_frame.get("joystick_tilt", False)) if vr_frame else False
+        _is_home = is_navigating_home.is_set()
+        if vr_frame and vr_frame.get("thumbstick", False) and not _is_home and not _is_joy_tilt:
+            _is_joy_tilt = True
 
+        # C. Xử lý Nút B (hoặc Y trên tay trái):
+        # - Nếu đang bóp Grip + ấn Nút B -> Hiệu chuẩn bàn máy (Grip + B combo)
+        # - Nếu ấn Nút B đơn lẻ -> Bật/Tắt chế độ Teleop (Toggle Teleop)
+        btn_b_triggered = _is_btn_b and not _last_btn_b_state
+        _last_btn_b_state = _is_btn_b
+        if btn_b_triggered:
+            if _is_grip:
+                pose_source.calibrate_desk(vr_frame)
+                quest_server.send_haptic(intensity=0.9, duration=200)
+                ui.set_status("Hiệu chuẩn bàn máy OK")
+            else:
+                new_teleop_state = not ui.cb_teleop.value
+                ui.cb_teleop.value = new_teleop_state
+                state_str = "ACTIVE" if new_teleop_state else "INACTIVE"
+                print(f"[Teleop] Nút B -> Chuyển trạng thái Teleop: {state_str}")
+                quest_server.send_haptic(intensity=0.7, duration=150)
 
-        # C. Cập nhật trạng thái kết nối
+        # D. Cập nhật trạng thái kết nối
         ui.set_connected(quest_server.is_connected())
 
-        # D. Đồng bộ bật/tắt Teleop
+        # E. Đồng bộ bật/tắt Teleop
         if quest_server.is_connected():
             curr_quest_mode = quest_server.get_drive_mode()
             if curr_quest_mode != _last_quest_drive_mode:
@@ -307,7 +335,7 @@ def main():
                 watchdog.disarm()
                 ui.set_status("Tắt")
 
-        # E. Lấy trạng thái góc khớp và FK của robot
+        # F. Lấy trạng thái góc khớp và FK của robot
         try:
             q_real = ctrl.joints()
             fk_res = teleop._solver.fk(q_real)
@@ -315,11 +343,35 @@ def main():
             q_real = None
             fk_res = None
 
-        is_grip_pressed = False
+        # G. Phát hiện sự kiện nhả cò súng (Trigger: 1 -> 0):
+        # Dừng robot ngay lập tức và in log xác nhận trạng thái cò = 0 và vận tốc motor = 0
+        if _last_trig_state and not _is_trig:
+            executor.stop(10.0)
+            teleop.stop(10.0)
+            pose_source.reset_anchor()
+            if q_real is not None:
+                teleop._last_valid_q = list(q_real)
+            try:
+                qd = ctrl.rr.getActualQd()
+                motor_vel = max(abs(v) for v in qd) if qd else 0.0
+            except Exception:
+                motor_vel = 0.0
+            if motor_vel < 0.001:
+                motor_vel = 0.0
+            print(f"[Teleop] Cò súng nhả (cò=0) -> Dừng robot ngay lập tức (vận tốc motor = {motor_vel:.4f} rad/s)")
+        _last_trig_state = _is_trig
 
-        # F. Cơ chế Toggle Gripper (Bấm nút A/X trên kính Quest hoặc click chuột trên Viser Dashboard)
+        # Tương tự khi nhả Grip xoay
+        if _last_grip_state and not _is_grip:
+            executor.stop(10.0)
+            teleop.stop(10.0)
+            pose_source.reset_anchor()
+            if q_real is not None:
+                teleop._last_valid_q = list(q_real)
+        _last_grip_state = _is_grip
+
+        # H. Cơ chế Toggle Gripper (Bấm nút A/X trên kính Quest hoặc click chuột trên Viser Dashboard)
         toggle_triggered = quest_server.check_and_clear_gripper_toggle()
-        vr_frame = quest_server.get_frame()
         raw_vr_gripper = False
         if vr_frame:
             raw_vr_gripper = bool(
@@ -333,15 +385,7 @@ def main():
             toggle_triggered = True
         _last_vr_gripper_raw = raw_vr_gripper
 
-        # Cập nhật màu sắc & phím bấm của mô hình tay cầm VR trên Viser (8 trạng thái trực quan)
-        _is_trig = bool(vr_frame.get("trigger", False)) if vr_frame else False
-        _is_grip = bool(vr_frame.get("grip", False)) if vr_frame else False
-        _is_btn_b = bool(vr_frame.get("button_b", False) or vr_frame.get("button_y", False)) if vr_frame else False
-        _is_joy_tilt = bool(vr_frame.get("joystick_tilt", False)) if vr_frame else False
-        _is_home = is_navigating_home.is_set()
-        if vr_frame and vr_frame.get("thumbstick", False) and not _is_home and not _is_joy_tilt:
-            _is_joy_tilt = True
-
+        # Cập nhật màu sắc & phím bấm của mô hình tay cầm VR trên Viser
         ui.update_controller_visual(
             is_translating=_is_trig,
             is_rotating=_is_grip,
@@ -372,62 +416,68 @@ def main():
                     ui.target_widget.position = vr_pose["pos"]
                     ui.target_widget.wxyz = vr_pose["quat"]
 
-                # Giải IK và gửi lệnh điều khiển tới robot
-                teleop.step(q_real, pose=vr_pose)
-                current_status = teleop.get_status()
-                status_low = current_status.lower()
+                    # Giải IK và gửi lệnh điều khiển tới robot
+                    teleop.step(q_real, pose=vr_pose)
+                    current_status = teleop.get_status()
+                    status_low = current_status.lower()
 
-                if "thất bại" in status_low or "fail" in status_low:
-                    ui.set_status("IK Error")
-                elif "ngoai tam voi" in status_low or "ngoài tầm với" in status_low or "out of reach" in status_low:
-                    ui.set_status("Ngoài tầm với (Out of Reach)")
-                elif "mặt bàn" in status_low or "mat ban" in status_low or "table limit" in status_low:
-                    ui.set_status("Sát mặt bàn bảo vệ")
-                elif "van xoan" in status_low or "vặn xoắn" in status_low or "tu the ket" in status_low or "tư thế kẹt" in status_low:
-                    ui.set_status("Tư thế kẹt (Vặn xoắn)")
-                elif "vat can" in status_low or "vật cản" in status_low:
-                    ui.set_status("Vướng vật cản")
-                elif "singularity" in status_low or "kì dị" in status_low:
-                    ui.set_status("Singularity")
-                elif "sigma=" in status_low or "pyroki" in status_low:
-                    ui.set_status("Tracking")
+                    if "thất bại" in status_low or "fail" in status_low:
+                        ui.set_status("IK Error")
+                    elif "ngoai tam voi" in status_low or "ngoài tầm với" in status_low or "out of reach" in status_low:
+                        ui.set_status("Ngoài tầm với (Out of Reach)")
+                    elif "mặt bàn" in status_low or "mat ban" in status_low or "table limit" in status_low:
+                        ui.set_status("Sát mặt bàn bảo vệ")
+                    elif "van xoan" in status_low or "vặn xoắn" in status_low or "tu the ket" in status_low or "tư thế kẹt" in status_low:
+                        ui.set_status("Tư thế kẹt (Vặn xoắn)")
+                    elif "vat can" in status_low or "vật cản" in status_low:
+                        ui.set_status("Vướng vật cản")
+                    elif "singularity" in status_low or "kì dị" in status_low:
+                        ui.set_status("Singularity")
+                    elif "sigma=" in status_low or "pyroki" in status_low:
+                        ui.set_status("Tracking")
+                    else:
+                        ui.set_status(current_status.split("|")[0].strip())
+
+                    # Tự động hồi phục XYZ nếu kẹt tư thế hoặc vướng vật cản kéo dài
+                    is_twisting = any(err in status_low for err in ["van xoan", "vặn xoắn", "tu the ket", "tư thế kẹt", "twist"])
+                    is_obstacle = any(err in status_low for err in ["vat can", "vật cản", "dung vat can", "đụng vật cản", "obstacle"])
+                    is_stuck = is_twisting or is_obstacle or any(err in status_low for err in [
+                        "ngoai tam voi", "ngoài tầm với", "out of reach",
+                        "singularity", "wrist_clamp", "that bai", "thất bại", "fail", "ik error"
+                    ])
+
+                    snap_threshold = 1.2 if (is_twisting or is_obstacle) else 1.8
+                    if is_stuck:
+                        pose_source.out_of_reach_time += POLL_SLEEP
+                        quest_server.send_haptic(intensity=0.8, duration=80)
+                    else:
+                        pose_source.out_of_reach_time = 0.0
+
+                    if pose_source.out_of_reach_time >= snap_threshold:
+                        ui.target_widget.position = fk_res["pos"]
+                        ui.target_widget.wxyz = fk_res["quat"]
+                        widget_pose_source._ema_pos = None
+                        widget_pose_source._ema_quat_xyzw = None
+                        if hasattr(pose_source, "_anchor_pos_quest"):
+                            pose_source._anchor_pos_quest = None
+                            pose_source._anchor_tcp = None
+                            pose_source._ema_pos = None
+                            pose_source._ema_quat_xyzw = None
+                            pose_source._last_button_state = 0
+                        pose_source.out_of_reach_time = 0.0
+                        teleop._last_valid_q = list(q_real)
+                        ui.set_status("Tự động thu hồi XYZ")
+                        quest_server.send_haptic(intensity=1.0, duration=200)
+
+                        if not hasattr(main, "_last_snap_log_time") or time.time() - main._last_snap_log_time > 3.0:
+                            main._last_snap_log_time = time.time()
+                            print(f"[Auto-Snap] Dừng: {current_status}")
                 else:
-                    ui.set_status(current_status.split("|")[0].strip())
-
-                # Tự động hồi phục XYZ nếu kẹt tư thế hoặc vướng vật cản kéo dài
-                is_twisting = any(err in status_low for err in ["van xoan", "vặn xoắn", "tu the ket", "tư thế kẹt", "twist"])
-                is_obstacle = any(err in status_low for err in ["vat can", "vật cản", "dung vat can", "đụng vật cản", "obstacle"])
-                is_stuck = is_twisting or is_obstacle or any(err in status_low for err in [
-                    "ngoai tam voi", "ngoài tầm với", "out of reach",
-                    "singularity", "wrist_clamp", "that bai", "thất bại", "fail", "ik error"
-                ])
-
-                snap_threshold = 1.2 if (is_twisting or is_obstacle) else 1.8
-                if is_stuck:
-                    pose_source.out_of_reach_time += POLL_SLEEP
-                    quest_server.send_haptic(intensity=0.8, duration=80)
-                else:
+                    # Cò súng không ấn (và không giữ grip) -> Dừng robot ngay lập tức
+                    executor.stop(10.0)
                     pose_source.out_of_reach_time = 0.0
-
-                if pose_source.out_of_reach_time >= snap_threshold:
-                    ui.target_widget.position = fk_res["pos"]
-                    ui.target_widget.wxyz = fk_res["quat"]
-                    widget_pose_source._ema_pos = None
-                    widget_pose_source._ema_quat_xyzw = None
-                    if hasattr(pose_source, "_anchor_pos_quest"):
-                        pose_source._anchor_pos_quest = None
-                        pose_source._anchor_tcp = None
-                        pose_source._ema_pos = None
-                        pose_source._ema_quat_xyzw = None
-                        pose_source._last_button_state = 0
-                    pose_source.out_of_reach_time = 0.0
-                    teleop._last_valid_q = list(q_real)
-                    ui.set_status("Tự động thu hồi XYZ")
-                    quest_server.send_haptic(intensity=1.0, duration=200)
-
-                    if not hasattr(main, "_last_snap_log_time") or time.time() - main._last_snap_log_time > 3.0:
-                        main._last_snap_log_time = time.time()
-                        print(f"[Auto-Snap] Dừng: {current_status}")
+                    if not _is_trig and not _is_grip:
+                        ui.set_status("Sẵn sàng (Nhả cò)")
 
                 grip_val = 1.0 if _gripper_active else 0.0
                 is_holding, grasp_event = grasp_sim.update(fk_res["pos"], _gripper_active)

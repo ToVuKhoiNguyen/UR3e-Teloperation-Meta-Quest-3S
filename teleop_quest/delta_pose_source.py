@@ -38,6 +38,7 @@ class DeltaPoseSource:
         self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
         self._desk_u_right = np.array([1.0, 0.0, 0.0])
         self._last_btn_b = False
+        self._last_calib_combo = False
 
         raw_heading = os.environ.get("HEADING_MODE", "desk_aligned").lower()
         self.heading_mode = raw_heading
@@ -207,33 +208,44 @@ class DeltaPoseSource:
 
         return snapped
 
+    def calibrate_desk(self, frame=None):
+        """Hiệu chuẩn hướng bàn máy khi người dùng nhấn tổ hợp Grip + B (lấy yaw của head_quat)."""
+        if frame is None:
+            frame = self.server.get_frame()
+        if not frame:
+            return
+        head_quat = frame.get("head_quat", None)
+        if head_quat is not None:
+            r_head = R.from_quat([head_quat[1], head_quat[2], head_quat[3], head_quat[0]])
+            v_fwd = r_head.apply([0, 0, -1])  # Hướng nhìn trong không gian phòng WebXR
+            fx, fz = float(v_fwd[0]), float(v_fwd[2])
+            norm_h = float(np.hypot(fx, fz))
+            if norm_h > 0.05:
+                self._desk_u_fwd = np.array([fx / norm_h, 0.0, fz / norm_h])
+                self._desk_u_right = np.array([-fz / norm_h, 0.0, fx / norm_h])
+            else:
+                self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
+                self._desk_u_right = np.array([1.0, 0.0, 0.0])
+            desk_yaw = math.degrees(math.atan2(self._desk_u_fwd[0], -self._desk_u_fwd[2]))
+            print(f"[HIỆU CHUẨN] Bàn máy đã căn chỉnh theo kính VR (Grip + B): yaw={desk_yaw:+.1f}°")
+        else:
+            self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
+            self._desk_u_right = np.array([1.0, 0.0, 0.0])
+            print("[HIỆU CHUẨN] Bàn máy mặc định: yaw=+0.0°")
+
     def get_pose(self):
         frame = self.server.get_frame()
         if not frame:
             return None
 
-        # 1. Hiệu chuẩn hướng bàn máy khi người dùng bấm button_b (bắt cạnh lên):
-        # Lấy yaw của head_quat lúc đó làm _desk_u_fwd / _desk_u_right
+        # 1. Hiệu chuẩn hướng bàn máy khi người dùng bấm tổ hợp phím Grip + Button B (bắt cạnh lên):
+        # Nút B đơn lẻ dành riêng cho Bật/Tắt Teleop; Tổ hợp Grip + B dùng để hiệu chuẩn bàn máy.
         btn_b = bool(frame.get("button_b", False) or frame.get("buttons", {}).get("button_b", False))
-        if btn_b and not self._last_btn_b:
-            head_quat = frame.get("head_quat", None)
-            if head_quat is not None:
-                r_head = R.from_quat([head_quat[1], head_quat[2], head_quat[3], head_quat[0]])
-                v_fwd = r_head.apply([0, 0, -1])  # Hướng nhìn trong không gian phòng WebXR
-                fx, fz = float(v_fwd[0]), float(v_fwd[2])
-                norm_h = float(np.hypot(fx, fz))
-                if norm_h > 0.05:
-                    self._desk_u_fwd = np.array([fx / norm_h, 0.0, fz / norm_h])
-                    self._desk_u_right = np.array([-fz / norm_h, 0.0, fx / norm_h])
-                else:
-                    self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
-                    self._desk_u_right = np.array([1.0, 0.0, 0.0])
-                desk_yaw = math.degrees(math.atan2(self._desk_u_fwd[0], -self._desk_u_fwd[2]))
-                print(f"[HIỆU CHUẨN] bàn máy yaw={desk_yaw:+.1f}°")
-            else:
-                self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
-                self._desk_u_right = np.array([1.0, 0.0, 0.0])
-                print("[HIỆU CHUẨN] bàn máy yaw=+0.0°")
+        is_rotating = frame.get("grip", False)
+        calib_combo = is_rotating and btn_b
+        if calib_combo and not self._last_calib_combo:
+            self.calibrate_desk(frame)
+        self._last_calib_combo = calib_combo
         self._last_btn_b = btn_b
 
         # Không sinh delta pose khi đang ở Edit Mode để tránh di chuyển ngoài ý muốn

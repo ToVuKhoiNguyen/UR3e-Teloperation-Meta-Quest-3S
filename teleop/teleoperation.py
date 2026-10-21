@@ -175,6 +175,15 @@ class ServoJExecutor:
             except Exception as e:
                 pass
 
+    def stop(self, a=10.0):
+        """Dừng servo mode và phanh robot ngay lập tức (mặc định a=10.0 m/s^2)."""
+        with self._lock:
+            if self._ctrl:
+                try:
+                    self._ctrl.servoStop(a)
+                except Exception:
+                    pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 4: TeleoperationController (Điều phối tổng)
@@ -215,6 +224,10 @@ class TeleoperationController:
             self._status = "Đã tắt"
         self._enabled = value
 
+    def stop(self, a=10.0):
+        """Dừng robot khẩn cấp hoặc khi nhả phím điều khiển."""
+        self._exec.stop(a)
+
     def get_status(self):
         with self._lock:
             return self._status
@@ -238,7 +251,8 @@ class TeleoperationController:
         if pose is None:
             pose = self._pose.get_pose()
         if pose is None:
-            return  # pose không đổi → không gửi lệnh
+            self._exec.stop()
+            return  # pose không đổi / không ấn phím → dừng servoJ để robot đứng yên lập tức
 
         # ── Giải IK bằng PyRoki CPU ─────────────────────────────────────────
         q_seed = self._last_valid_q if self._last_valid_q is not None else q_real
@@ -256,6 +270,7 @@ class TeleoperationController:
                 if max_jump > 2.2:  # ~126 độ (chỉ chặn khi xảy ra đảo nhánh IK đột ngột)
                     with self._lock:
                         self._status = "Tư thế kẹt (Lỗi vặn xoắn khớp) - Dừng im"
+                    self._exec.stop()
                     return
                 
                 # Scaled Vector Rate Limiter: Co giãn đồng thời cả 6 khớp theo cùng một tỷ lệ
@@ -279,6 +294,7 @@ class TeleoperationController:
                     self._status = "Sát mặt bàn bảo vệ (Table Limit) - Dừng im"
                 else:
                     self._status = "Tư thế không khả thi / Vướng vật cản - Dừng im"
+            self._exec.stop()
             return
 
         # ── Kiểm tra SafetyGate ──────────────────────────────────────────────
@@ -286,6 +302,7 @@ class TeleoperationController:
         if not gate["pass"]:
             with self._lock:
                 self._status = f"Dừng - {gate['reason']}"
+            self._exec.stop()
             return
 
         # ── Gọi RTDEControl.servoJ ───────────────────────────────────────────

@@ -375,14 +375,28 @@
                     let btnBPressed = false;
                     
                     if (activeSource.gamepad && activeSource.gamepad.buttons) {
-                        // Button 0: Index Trigger (bóp trỏ - tịnh tiến)
-                        if (activeSource.gamepad.buttons.length > 0) triggerPressed = activeSource.gamepad.buttons[0].pressed;
-                        // Button 1: Hand Grip (bóp hông - xoay)
-                        if (activeSource.gamepad.buttons.length > 1) gripPressed = activeSource.gamepad.buttons[1].pressed;
+                        // Button 0: Index Trigger (bóp trỏ - tịnh tiến, ngưỡng > 0.25)
+                        if (activeSource.gamepad.buttons.length > 0) {
+                            let b0 = activeSource.gamepad.buttons[0];
+                            let trigVal = (typeof b0.value === 'number') ? b0.value : (b0.pressed ? 1.0 : 0.0);
+                            triggerPressed = trigVal > 0.25;
+                        }
+                        // Button 1: Hand Grip (bóp hông - xoay, ngưỡng > 0.25)
+                        if (activeSource.gamepad.buttons.length > 1) {
+                            let b1 = activeSource.gamepad.buttons[1];
+                            let gripVal = (typeof b1.value === 'number') ? b1.value : (b1.pressed ? 1.0 : 0.0);
+                            gripPressed = gripVal > 0.25;
+                        }
                         // Button 4: Nút A (tay phải) hoặc Nút X (tay trái) - Kẹp/Nhả Gripper
-                        if (activeSource.gamepad.buttons.length > 4) gripperRawPressed = activeSource.gamepad.buttons[4].pressed;
-                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Hiệu chuẩn bàn máy
-                        if (activeSource.gamepad.buttons.length > 5) btnBPressed = activeSource.gamepad.buttons[5].pressed;
+                        if (activeSource.gamepad.buttons.length > 4) {
+                            let b4 = activeSource.gamepad.buttons[4];
+                            gripperRawPressed = Boolean(b4.pressed || (typeof b4.value === 'number' && b4.value > 0.5));
+                        }
+                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Bật/Tắt Teleop (Grip + B để Hiệu chuẩn bàn máy)
+                        if (activeSource.gamepad.buttons.length > 5) {
+                            let b5 = activeSource.gamepad.buttons[5];
+                            btnBPressed = Boolean(b5.pressed || (typeof b5.value === 'number' && b5.value > 0.5));
+                        }
                     }
 
                     // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nút X)
