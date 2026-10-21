@@ -451,34 +451,67 @@ Mô hình tay cầm VR hoạt động như một bản sao kỹ thuật số (Di
    - Bấm **Apply** và xác nhận trạng thái mạng hiển thị *Network is connected*.
 3. **Cài đặt IP trên máy tính điều khiển (PC):**
    - Cài đặt IP máy tính cùng dải mạng: ví dụ `192.168.1.50`, Subnet Mask `255.255.255.0`.
-   - Kiểm tra kết nối mạng từ terminal máy tính:
+   - Kiểm tra kết nối mạng và kiểm tra mở 3 cổng dịch vụ cốt lõi của URControl:
      ```bash
      ping -c 3 192.168.1.100
+     # Quét 3 cổng dịch vụ: 29999 (Dashboard), 30002 (URScript Primary), 30004 (RTDE)
+     nc -zv 192.168.1.100 29999 30002 30004
      ```
 
-### 6.2. Thiết Lập Trên Tay Dạy PolyScope (Teach Pendant)
-1. **Bật chế độ Remote Control:**
-   - Vào **Settings** -> **System** -> **Remote Control** -> Chọn **Enable**.
-   - Ở góc trên cùng bên phải màn hình PolyScope, chuyển chế độ từ **Local** sang **Remote Control**.
-2. **Cài đặt Tải trọng Đầu Gắp (Payload & Center of Gravity - CoG):**
-   - Vào **Installation** -> **General** -> **Payload**.
-   - Cài đặt chính xác khối lượng ngàm kẹp + camera (ví dụ Robotiq 2F-85 + RealSense D435 $\approx 1.1$kg) và tọa độ trọng tâm CoG.
-3. **Bật nguồn và Nhả phanh:**
-   - Kích hoạt nguồn (Power On) và bấm **Release Brakes** để robot vào trạng thái sẵn sàng hoạt động (màn hình hiển thị màu xanh lá).
-4. **Hạ thanh trượt Tốc độ (Speed Slider):**
-   - Trong lần đầu vận hành, kéo thanh trượt tốc độ ở góc dưới màn hình PolyScope xuống mức **10% – 20%** để đảm bảo an toàn quan sát.
-5. **Cầm sẵn nút dừng khẩn cấp (Emergency Stop):**
-   - Luôn cầm Teach Pendant trên tay và sẵn sàng ấn nút E-Stop màu đỏ nếu robot có hiện tượng di chuyển sai hướng.
+### 6.2. Cấu Hình URCap & Tương Thích Thanh Ghi Fieldbus
+1. **Cài đặt URCap (Tùy chọn thiết bị ngoại vi):**
+   - Nếu sử dụng ngàm kẹp thực tế (ví dụ Robotiq 2F-85/Hand-E), cài đặt URCap chính hãng tương ứng qua **Settings** -> **System** -> **URCaps**.
+   - Nếu phối hợp với ROS 2 Driver, nạp daemon *External Control URCap* trên PolyScope và thiết lập IP máy trạm PC.
+2. **Xử lý xung đột thanh ghi RTDE (`One of the RTDE input registers are already in use!`):**
+   - **Nguyên nhân:** Các URCap giao tiếp hoặc giao thức công nghiệp (Profinet / EtherNet-IP) có thể chiếm dụng mặc định dải thanh ghi số nguyên thấp (registers 0-23) của RTDE.
+   - **Cách xử lý trên Teach Pendant:** Nếu không sử dụng PLC ngoại vi, hãy tắt dải truyền thông công nghiệp tại: **Installation** -> **Fieldbus** -> **Profinet / EtherNet-IP** -> Bỏ chọn *Enable*.
+   - **Cơ chế tự động của hệ thống:** Module `ServoJExecutor` tự động gửi tín hiệu `stop\n` tới Dashboard Server (Port 29999) trước khi bắt tay kết nối, đồng thời tự động kích hoạt cờ fallback `FLAG_UPPER_RANGE_REGISTERS` (chuyển sang dải thanh ghi trên 24-47) giúp hệ thống kết nối song song trơn tru mà không xung đột với URCap khác.
 
-### 6.3. Khởi Chạy Với Robot Thật
-Khởi chạy hệ thống bằng lệnh:
+### 6.3. Thiết Lập 5 Bước An Toàn Trên Tay Dạy PolyScope (Teach Pendant)
+1. **Bước 1: Cấp quyền và kích hoạt Remote Control (Bắt buộc cho kênh RTDE Control):**
+   - Vào **Settings** -> **System** -> **Remote Control** -> Chọn **Enable**.
+   - Quan sát góc trên cùng bên phải màn hình PolyScope (cạnh đồng hồ), nhấn vào biểu tượng tay dạy đang hiển thị **Local** và chuyển sang **Remote Control** (biểu tượng chuyển sang hình mạng máy tính).
+   *(Nếu bỏ qua bước này, URControl sẽ chặn socket ghi lệnh và báo lỗi: `Please enable remote control on the robot!`)*.
+2. **Bước 2: Cấu hình Ranh giới An toàn & Mặt phẳng Chống va chạm (Safety Limits & Boundaries):**
+   - Vào **Installation** -> **Safety** -> **Robot Limits**: Thiết lập giới hạn tốc độ đầu công cụ (TCP Speed Limit) $\le 250$ mm/s cho chế độ cộng tác an toàn ban đầu.
+   - Vào **Installation** -> **Safety** -> **Planes**: Thiết lập mặt phẳng an toàn bàn máy (*Restrict Plane*) cách mặt bàn vật lý $\ge 2$ cm. Tính năng an toàn phần cứng của URControl sẽ tự động ngắt dừng cánh tay nếu quỹ đạo điều khiển có nguy cơ va quẹt mặt bàn.
+3. **Bước 3: Khai báo Tải trọng Đầu Gắp (Payload), Trọng tâm (CoG) & Tọa độ TCP:**
+   - Vào **Installation** -> **General** -> **Payload & TCP**: Cài đặt chính xác khối lượng cụm ngàm gắp + camera + giá đỡ in 3D (ví dụ Robotiq 2F-85 + Intel RealSense D435 $\approx 1.1$ kg) và tọa độ trọng tâm CoG.
+   *(Tránh hiện tượng bù sai trọng trường dẫn đến rung giật cánh tay hoặc kích hoạt lỗi `Protective Stop: Position deviation`)*.
+4. **Bước 4: Đưa Robot về Tư thế Sẵn sàng Ban đầu (Ready Pose) Chống Kẹt Kỳ Dị (Singularity Trap):**
+   - Tại màn hình PolyScope (khi đang ở Local Mode), mở tab **Move** và điều khiển các khớp về cấu hình gập khuỷu tự nhiên, ví dụ:
+     - Khớp 1 (Base): $0^\circ$ (`0.0` rad)
+     - Khớp 2 (Shoulder): $-126^\circ$ (`-2.2` rad)
+     - Khớp 3 (Elbow): $+109^\circ$ (`+1.9` rad)
+     - Khớp 4 (Wrist 1): $-90^\circ$ (`-1.57` rad)
+     - Khớp 5 (Wrist 2): $-90^\circ$ (`-1.57` rad)
+     - Khớp 6 (Wrist 3): $0^\circ$ (`0.0` rad)
+   - **Lưu ý đặc biệt:** Tuyệt đối không để cổ tay duỗi thẳng hàng ($q_5 \approx 0^\circ$). Tránh tình trạng giá trị suy biến nhỏ nhất $\sigma_{min} < 0.035$ khiến lớp bảo vệ `SafetyGate` cự tuyệt lệnh và kích hoạt vòng lặp `Auto-Snap` liên tục ngay khi vừa khởi chạy.
+5. **Bước 5: Bật Nguồn, Nhả Phanh và Giới hạn Tốc độ Ban đầu:**
+   - Nhấp vào nút trạng thái robot ở góc dưới cùng bên trái màn hình: bấm **Power On** -> bấm **Release Brakes** (Đèn trạng thái chuyển sang màu xanh lá `RUNNING`).
+   - Kéo thanh trượt tốc độ (**Speed Slider**) ở chân màn hình PolyScope xuống mức **10% – 20%** để giám sát trực quan phản hồi trong những thao tác đầu tiên.
+   - Người giám sát luôn cầm sẵn Teach Pendant trên tay, ngón tay đặt tại nút Dừng khẩn cấp (**Emergency Stop**) màu đỏ để chủ động can thiệp.
+
+### 6.4. Khởi Chạy Với Robot Thật
+Khởi chạy hệ thống bằng lệnh (truyền trực tiếp địa chỉ IP mạng LAN của robot):
 ```bash
+cd /home/nguyen/ur_ws/pyroki_ursim
+source .venv/bin/activate
+
+# 1. Chạy với Robot UR3e thật (Camera mô phỏng 3D Eye-in-Hand):
 python3 main.py --robot-ip 192.168.1.100
-```
-Nếu có camera vật lý Intel RealSense hoặc USB gắn tại cổ tay:
-```bash
+
+# 2. Chạy với Robot UR3e thật kèm Camera vật lý (Intel RealSense D435/D455 hoặc USB Webcam):
 python3 main.py --robot-ip 192.168.1.100 --camera real --camera-device 0
 ```
+
+**Dấu hiệu nhận biết kết nối phần cứng thành công trên Terminal:**
+```text
+[Setup] Connected. Joints: [...]
+[ServoJ] RTDEControl connected: True
+[Teleop] KÍCH HOẠT ĐIỀU KHIỂN.
+```
+*(Không còn xuất hiện thông báo lỗi `Remote Control` hay cảnh báo dừng `SingularityTrap`).*
 
 ---
 

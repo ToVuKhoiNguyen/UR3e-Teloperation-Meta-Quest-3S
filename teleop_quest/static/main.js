@@ -195,14 +195,26 @@
         // Khởi động vòng lặp polling 10Hz (mỗi 100ms) để cập nhật HUD màn hình PC lập tức
         setInterval(fetchTelemetryPoll, 100);
 
+        let reconnectDelay = 150; // Khởi đầu retry nhanh 150ms thay vì 2000ms
+
         function connectWebSocket() {
-            let host = window.location.hostname || '127.0.0.1';
+            // 1. Chuẩn hóa hostname để tránh lỗi phân giải IPv6 ::1 gây delay trên Linux
+            let rawHost = window.location.hostname;
+            let isLoopback = (!rawHost || rawHost === 'localhost' || rawHost === '127.0.0.1');
+            let host = isLoopback ? '127.0.0.1' : rawHost;
             let isHttps = window.location.protocol === 'https:';
-            // Meta Quest WebXR chạy https: -> dùng wss:// cổng 8444
-            // Xem PC (file:/// hoặc http:) -> dùng ws:// cổng 8445 không cần chứng chỉ SSL tự ký
-            const wsUrl = isHttps ? `wss://${host}:8444` : `ws://${host}:8445`;
+
+            // 2. Tối ưu cổng kết nối:
+            // Loopback trên PC dùng ws://127.0.0.1:8445 (kết nối siêu nhanh ~2ms, bỏ qua TLS handshake & SSL warning)
+            // Kính Quest từ xa qua HTTPS LAN dùng wss://${host}:8444
+            const wsUrl = (isHttps && !isLoopback) ? `wss://${host}:8444` : `ws://${host}:8445`;
             
             try {
+                if (ws) {
+                    ws.onclose = null;
+                    ws.onerror = null;
+                    ws.close();
+                }
                 ws = new WebSocket(wsUrl);
             } catch (err) {
                 console.error("Lỗi khởi tạo WebSocket:", err);
@@ -211,6 +223,7 @@
 
             ws.onopen = () => {
                 isWsActive = true;
+                reconnectDelay = 150;
                 statusDiv.innerText = isHttps ? "Connected (Secure WSS)" : "Connected (Local WS)";
                 statusDiv.classList.remove("warning");
                 statusDiv.classList.add("success");
@@ -251,7 +264,8 @@
                 isWsActive = false;
                 statusDiv.innerText = "WS Disconnected (HTTP Active)";
                 updateRobotStatusBadge("Connecting...", "orange");
-                setTimeout(connectWebSocket, 2000);
+                setTimeout(connectWebSocket, reconnectDelay);
+                reconnectDelay = Math.min(2000, reconnectDelay * 1.5);
             };
         }
 
