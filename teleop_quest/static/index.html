@@ -64,7 +64,6 @@
             <div class="cockpit-body">
                 <!-- Left: Viser 3D (2/3) -->
                 <div class="viser-column">
-                    <div class="section-title">Viser 3D (Robot Status)</div>
                     <div id="viser-view">
                         <iframe id="viser-iframe" src="" width="100%" height="100%" frameborder="0"></iframe>
                     </div>
@@ -72,25 +71,9 @@
 
                 <!-- Right: Camera & Stats (1/3) -->
                 <div class="sidebar-right">
-                    <!-- Thanh trạng thái điều khiển: Trạng thái Cò & Scale -->
-                    <div class="sidebar-control-bar" style="display: flex; gap: 10px; align-items: center; justify-content: space-between; background: #ffffff; padding: 10px 16px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; margin-bottom: 4px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Trạng thái:</span>
-                            <span id="robot-status-badge" class="badge orange" style="font-size: 12px; padding: 3px 10px; font-weight: 600;">Connecting...</span>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <span id="scale-badge" class="badge" style="font-size: 12px; padding: 3px 10px; font-weight: 600; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;">Scale: 1.00x</span>
-                        </div>
-                    </div>
 
                     <!-- Khung xem trước Camera Cổ tay tương tự sidebar Viser -->
                     <div class="status-card" id="card-wrist-cam" style="padding: 16px;">
-                        <div class="card-title"
-                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                            <span>WRIST CAMERA LIVE PREVIEW</span>
-                            <span class="badge green"
-                                style="font-size: 11px; padding: 2px 8px; font-weight: 600;">LIVE</span>
-                        </div>
                         <div id="cam-stream">
                             <img id="wrist-cam-img" src="video_feed" alt="Góc nhìn Cổ tay Robot"
                                 onload="this.style.display='block'; document.getElementById('cam-placeholder').style.display='none';"
@@ -262,14 +245,6 @@
                                         <div id="ptr-wrist3" class="ur-track-pointer" style="left: 50%;"></div>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-
-                        <!-- System / Gripper Status -->
-                        <div class="ur-status-footer">
-                            <div class="ur-status-row">
-                                <span style="font-size: 12px; font-weight: 600; color: #475569;">Gripper:</span>
-                                <span id="val-gripper-state" class="badge gray">Open</span>
                             </div>
                         </div>
                     </div>

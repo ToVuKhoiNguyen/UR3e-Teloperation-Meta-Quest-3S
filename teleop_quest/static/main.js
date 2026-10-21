@@ -56,6 +56,16 @@
         let isWsActive = false;
         let lastTelemetryTime = 0;
 
+        function updateRobotStatusBadge(text, colorClass) {
+            const badge = document.getElementById('robot-status-badge');
+            if (badge) {
+                if (text) badge.innerText = text;
+                if (colorClass) {
+                    badge.className = `badge ${colorClass}`;
+                }
+            }
+        }
+
         function quatToRotVec(w, x, y, z) {
             let angle = 2 * Math.acos(Math.max(-1, Math.min(1, w)));
             let s = Math.sqrt(Math.max(0, 1 - w * w));
@@ -134,18 +144,27 @@
             }
 
             // 4. Cập nhật Robot Status Badge
-            const elRobotStatus = document.getElementById('robot-status-badge');
-            if (elRobotStatus && data.status) {
-                elRobotStatus.innerText = data.status;
-                let st = data.status.toLowerCase();
-                if (st.includes('tracking') || st.includes('home') || st.includes('bật') || st.includes('sẵn sàng') || st.includes('standby')) {
-                    elRobotStatus.className = 'badge green';
-                } else if (st.includes('lỗi') || st.includes('error') || st.includes('stop') || st.includes('kẹt')) {
-                    elRobotStatus.className = 'badge red';
-                } else {
-                    elRobotStatus.className = 'badge orange';
-                }
+            let statusText = "Sẵn sàng";
+            let colorClass = "green";
+            if (data.controller && typeof data.controller.trigger !== 'undefined') {
+                statusText = data.controller.trigger ? "Tracking" : "Sẵn sàng (Nhả cò)";
+            } else if (data.status && data.status !== "OK") {
+                statusText = data.status;
+            } else if (isWsActive) {
+                statusText = "Sẵn sàng";
+            } else {
+                statusText = "Connecting...";
+                colorClass = "orange";
             }
+            let st = statusText.toLowerCase();
+            if (st.includes('lỗi') || st.includes('error') || st.includes('stop') || st.includes('kẹt') || st.includes('disconnected')) {
+                colorClass = 'red';
+            } else if (st.includes('connecting') || st.includes('reconnecting') || st.includes('waiting')) {
+                colorClass = 'orange';
+            } else {
+                colorClass = 'green';
+            }
+            updateRobotStatusBadge(statusText, colorClass);
 
             // 5. Cập nhật Scale Badge nếu có
             if (typeof data.scale !== 'undefined') {
@@ -194,12 +213,14 @@
                 statusDiv.innerText = isHttps ? "Connected (Secure WSS)" : "Connected (Local WS)";
                 statusDiv.classList.remove("warning");
                 statusDiv.classList.add("success");
+                updateRobotStatusBadge("Connected", "green");
                 checkWebXR();
             };
 
             ws.onerror = (err) => {
                 isWsActive = false;
                 statusDiv.innerText = "WS Reconnecting (HTTP Active)";
+                updateRobotStatusBadge("Connecting...", "orange");
                 console.warn("WS Error (falling back to HTTP Telemetry)", err);
             };
 
@@ -214,6 +235,7 @@
                         }
                     } else if (data.type === 'teleop_state') {
                         setDriveMode(Boolean(data.enabled), false);
+                        updateRobotStatusBadge(data.enabled ? "Tracking" : "Sẵn sàng (Nhả cò)", "green");
                     } else if (data.type === 'camera' && data.image) {
                         updateCamDisplay('data:image/jpeg;base64,' + data.image);
                     } else if (data.type === 'robot_telemetry') {
@@ -227,6 +249,7 @@
             ws.onclose = () => {
                 isWsActive = false;
                 statusDiv.innerText = "WS Disconnected (HTTP Active)";
+                updateRobotStatusBadge("Connecting...", "orange");
                 setTimeout(connectWebSocket, 2000);
             };
         }
@@ -527,6 +550,7 @@
                         elValTrigger.innerText = triggerPressed ? "Pressed" : "Released";
                         elValTrigger.className = triggerPressed ? "badge red" : "badge gray";
                     }
+                    updateRobotStatusBadge(triggerPressed ? "Tracking" : "Sẵn sàng (Nhả cò)", "green");
                     if (elValGrip) {
                         elValGrip.innerText = gripPressed ? "Pressed" : "Released";
                         elValGrip.className = gripPressed ? "badge red" : "badge gray";
