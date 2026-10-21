@@ -78,17 +78,20 @@ button {
     transition: opacity 0.2s ease;
 }
 
-/* Drive Mode: Màn hình xuyên thấu - Tắt toàn bộ tia laser chuột DOM Overlay để tay cầm tự do lái robot 6DoF */
-#vr-overlay.drive-mode,
-#vr-overlay.drive-mode *,
-#cockpit-panel.drive-mode,
-#cockpit-panel.drive-mode * {
-    pointer-events: none !important;
+/* Drive Mode: Màn hình xuyên thấu - Nền vr-overlay không bắt chuột để tay cầm tự do lái robot 6DoF */
+#vr-overlay.drive-mode {
+    pointer-events: none;
+}
+
+/* Bảng Cockpit Panel (Viser 3D, thanh trượt, nút bấm, thông số) luôn mở toàn bộ tương tác click/touch */
+#cockpit-panel,
+#cockpit-panel * {
+    pointer-events: auto !important;
 }
 
 /* Cho phép nút Exit VR trên thanh tiêu đề đón nhận click nếu người dùng trỏ thẳng vào */
 #vr-overlay.drive-mode #btn-exit-vr,
-#cockpit-panel.drive-mode #btn-exit-vr {
+#cockpit-panel #btn-exit-vr {
     pointer-events: auto !important;
 }
 

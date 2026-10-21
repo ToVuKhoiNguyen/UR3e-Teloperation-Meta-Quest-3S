@@ -56,9 +56,11 @@ class DeltaPoseSource:
         self.lat_deadband = float(os.environ.get("LAT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu rung lắc ngang do bóp ngón trỏ)
         self.vert_deadband = float(os.environ.get("VERT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu vi rung nâng hạ tay)
         self.enable_cross_axis_damping = os.environ.get("CROSS_AXIS_DAMPING_ENABLE", "1") == "1"
-        self.cross_axis_damping = float(os.environ.get("CROSS_AXIS_DAMPING", "0.55")) # Gọt bớt trục phụ về 55%
-        self.cross_axis_low = float(os.environ.get("CROSS_AXIS_THRESH_LOW", "0.30"))   # < 30%: gọt bớt 55%
-        self.cross_axis_high = float(os.environ.get("CROSS_AXIS_THRESH_HIGH", "0.60")) # > 60%: mở khóa 100%
+        self.cone_deadzone_low = float(os.environ.get("CONE_DEADZONE_LOW", os.environ.get("CROSS_AXIS_THRESH_LOW", "0.20")))   # < 20%: ép trục phụ về 0.0 (rãnh đi thẳng tuyệt đối)
+        self.cone_deadzone_high = float(os.environ.get("CONE_DEADZONE_HIGH", os.environ.get("CROSS_AXIS_THRESH_HIGH", "0.50"))) # > 50%: mở khóa 100% đi chéo tự do
+        self.cross_axis_low = self.cone_deadzone_low
+        self.cross_axis_high = self.cone_deadzone_high
+        self.cross_axis_damping = 0.0
         self.rot_snap_low = float(os.environ.get("ROT_SNAP_LOW", "0.55"))   # < 55%: khóa cứng rãnh đơn trục (Phương án A)
         self.rot_snap_high = float(os.environ.get("ROT_SNAP_HIGH", "0.75")) # > 75%: mở xoay 3D đa trục khi chủ ý bẻ chéo lớn
         self._last_dominant_rot_axis = None
@@ -131,36 +133,41 @@ class DeltaPoseSource:
 
     def _apply_bidirectional_cross_axis_damping(self, delta_vec):
         """
-        Bộ lọc giảm nhiễu chéo hai chiều (Bi-directional Cross-Axis Damping):
-        - Trục chính chiếm ưu thế giữ 100% biên độ cử động thật.
-        - Trục phụ có biên độ nhỏ (< 30% trục chính): gọt bớt còn 55% để triệt tiêu lực rung tay vô thức.
-        - Khoảng [30%, 60%]: chuyển tiếp mượt mà bằng đường cong Hermite smoothstep từ 0.55 -> 1.0.
-        - Khi > 60%: mở khóa hoàn toàn 100% cho phép di chuyển chéo đa trục tự do.
-        - Không dùng Hysteresis khóa cứng, không bao giờ ép về 0.0 để tránh khựng giật.
+        Bộ lọc nhiễu rung tay Smooth Axial Cone Deadzone (SACD) - Phương án 1A (Direct Component Gating):
+        - Xác định trục chính có lực đẩy lớn nhất (Dominant Axis) và giữ nguyên 100% biên độ cử động thật.
+        - Trục phụ có tỷ số rò rỉ r <= CONE_DEADZONE_LOW (mặc định 0.20 ~ 11.3°): Triệt tiêu HOÀN TOÀN về 0.0.
+          Giúp robot di chuyển thẳng tắp, không bị trôi dạt do rung lắc vô thức của tay người.
+        - Khoảng [CONE_DEADZONE_LOW, CONE_DEADZONE_HIGH] (0.20 - 0.50): Chuyển tiếp mượt mà bằng đường cong
+          Hermite Smoothstep bậc 3 từ 0.0 -> 1.0 (đạo hàm bậc 1 triệt tiêu ở 2 đầu biên, chống giật khựng).
+        - Khi r >= CONE_DEADZONE_HIGH (mặc định 0.50 ~ 26.6°): Mở khóa 100% cho phép di chuyển chéo đa trục tự do.
+        - Xử lý an toàn cực trị: Khi vector bằng 0 (người dùng đứng im), trả về vector 0 mà không phát sinh ZeroDivisionError.
         """
-        vec = np.array(delta_vec, dtype=float)
+        vec = np.asarray(delta_vec, dtype=float)
         abs_v = np.abs(vec)
-        curr_max_idx = int(np.argmax(abs_v))
-        max_val = abs_v[curr_max_idx]
-        if max_val < 1e-4:
-            return vec
+        max_val = float(np.max(abs_v))
 
+        # Xử lý cực trị: người dùng đứng im hoặc vi dịch chuyển cực nhỏ < 1e-6 -> trả về an toàn, chống chia 0
+        if max_val < 1e-6:
+            return np.zeros_like(vec)
+
+        curr_max_idx = int(np.argmax(abs_v))
         out = np.copy(vec)
-        low_t = self.cross_axis_low
-        high_t = self.cross_axis_high
-        min_scale = self.cross_axis_damping
-        for i in range(3):
+        low_t = self.cone_deadzone_low
+        high_t = self.cone_deadzone_high
+
+        for i in range(len(vec)):
             if i == curr_max_idx:
                 continue
-            ratio = abs_v[i] / max_val
+            ratio = abs_v[i] / (max_val + 1e-9)
             if ratio <= low_t:
-                scale = min_scale
+                out[i] = 0.0
             elif ratio < high_t:
                 t = (ratio - low_t) / (high_t - low_t)
-                scale = min_scale + (1.0 - min_scale) * t * t * (3.0 - 2.0 * t)
+                scale = t * t * (3.0 - 2.0 * t)  # Hermite smoothstep C1
+                out[i] = vec[i] * scale
             else:
-                scale = 1.0
-            out[i] = vec[i] * scale
+                out[i] = vec[i]
+
         return out
 
     def _apply_soft_rotation_snapping(self, rotvec_tcp, rot_deadband=None):

@@ -146,6 +146,14 @@
                     elRobotStatus.className = 'badge orange';
                 }
             }
+
+            // 5. Cập nhật Scale Badge nếu có
+            if (typeof data.scale !== 'undefined') {
+                const elScale = document.getElementById('scale-badge');
+                if (elScale) {
+                    elScale.innerText = `Scale: ${Number(data.scale).toFixed(2)}x`;
+                }
+            }
         }
 
         async function fetchTelemetryPoll() {
@@ -460,12 +468,15 @@
                     let stickX = 0.0;
                     let stickY = 0.0;
                     if (activeSource.gamepad && activeSource.gamepad.axes && activeSource.gamepad.axes.length >= 2) {
-                        if (activeSource.gamepad.axes.length >= 4) {
-                            stickX = activeSource.gamepad.axes[2];
-                            stickY = activeSource.gamepad.axes[3];
-                        } else {
-                            stickX = activeSource.gamepad.axes[0];
-                            stickY = activeSource.gamepad.axes[1];
+                        // Chuẩn XR-standard (Meta Quest Touch Controller): axes[0] là X, axes[1] là Y
+                        stickX = activeSource.gamepad.axes[0];
+                        stickY = activeSource.gamepad.axes[1];
+                        // Fallback nếu trục điều khiển nằm ở axes[2], axes[3]
+                        if (Math.abs(stickX) < 0.05 && Math.abs(stickY) < 0.05 && activeSource.gamepad.axes.length >= 4) {
+                            if (Math.abs(activeSource.gamepad.axes[2]) > 0.05 || Math.abs(activeSource.gamepad.axes[3]) > 0.05) {
+                                stickX = activeSource.gamepad.axes[2];
+                                stickY = activeSource.gamepad.axes[3];
+                            }
                         }
                         stickTilted = Math.abs(stickX) > 0.15 || Math.abs(stickY) > 0.15;
                     }

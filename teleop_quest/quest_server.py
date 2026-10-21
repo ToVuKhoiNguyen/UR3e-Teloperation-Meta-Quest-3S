@@ -148,7 +148,7 @@ class QuestServer:
                 except Exception:
                     pass
 
-    def broadcast_robot_telemetry(self, pos: list = None, quat: list = None, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None):
+    def broadcast_robot_telemetry(self, pos: list = None, quat: list = None, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None, scale: float = None):
         """Phát tọa độ TCP thực tế, quaternion và trạng thái robot + VR controller tới WebXR Cockpit HUD."""
         with self._lock:
             clients = list(self._clients)
@@ -186,12 +186,20 @@ class QuestServer:
             "drive_mode": bool(drive_mode)
         }
 
+        # Xác định scale hiện tại
+        cur_scale = 1.0
+        if scale is not None:
+            cur_scale = round(float(scale), 2)
+        elif cached_dict and "scale" in cached_dict:
+            cur_scale = float(cached_dict["scale"])
+
         msg_dict = {
             "type": "robot_telemetry",
             "pos": [round(float(p), 4) for p in pos] if pos is not None else [0.0, 0.0, 0.0],
             "quat": [round(float(q), 4) for q in quat] if quat is not None else [1.0, 0.0, 0.0, 0.0],
             "status": str(status),
             "gripper": bool(gripper),
+            "scale": cur_scale,
             "controller": controller_info
         }
         if joints is not None:

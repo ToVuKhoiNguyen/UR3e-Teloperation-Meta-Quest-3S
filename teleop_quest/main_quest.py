@@ -199,6 +199,8 @@ def register_ui_callbacks(
             new_scale = float(ui.slider_sensitivity.value)
             if pose_source is not None and abs(pose_source.scale - new_scale) > 1e-3:
                 pose_source.scale = new_scale
+                if quest_server is not None:
+                    quest_server.broadcast_robot_telemetry(scale=new_scale)
             latency_ms = (time.perf_counter() - t0) * 1000.0
             print(f"[Viser UI Event] Điều chỉnh độ nhạy (Scale): {new_scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
@@ -443,14 +445,17 @@ def main():
             # Cần đẩy lên (stick_y < -0.35): Tăng độ nhạy; Kéo xuống (stick_y > 0.35): Giảm độ nhạy
             d_scale = -stick_y * 0.4 * POLL_SLEEP
             new_scale = float(np.clip(pose_source.scale + d_scale, 0.25, 3.0))
-            if abs(new_scale - pose_source.scale) > 0.005:
-                pose_source.scale = round(new_scale, 2)
-                if hasattr(ui, "slider_sensitivity") and ui.slider_sensitivity is not None:
-                    ui.slider_sensitivity.value = pose_source.scale
-                latency_ms = (time.perf_counter() - t_stick) * 1000.0
-                if time.time() - _last_scale_log_time > 0.4:
-                    _last_scale_log_time = time.time()
-                    print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {pose_source.scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
+            pose_source.scale = new_scale
+            STEP = 0.05
+            snapped_scale = round(round(new_scale / STEP) * STEP, 2)
+            if hasattr(ui, "slider_sensitivity") and ui.slider_sensitivity is not None:
+                if abs(ui.slider_sensitivity.value - snapped_scale) >= (STEP - 1e-4):
+                    ui.slider_sensitivity.value = snapped_scale
+                    quest_server.broadcast_robot_telemetry(scale=snapped_scale)
+            latency_ms = (time.perf_counter() - t_stick) * 1000.0
+            if time.time() - _last_scale_log_time > 0.4:
+                _last_scale_log_time = time.time()
+                print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {snapped_scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
         # C. Xử lý Nút B (hoặc Y trên tay trái) - Chuẩn stable-pyroki-2026-10-21:
         # Bấm Nút B (đơn lẻ hoặc kết hợp Grip) CHỈ dùng để Hiệu chuẩn hướng bàn máy.
@@ -689,7 +694,8 @@ def main():
                 status=str(ui.ui_status.value),
                 gripper=_gripper_active,
                 joints=q_real,
-                tcp_pose=tcp_cur
+                tcp_pose=tcp_cur,
+                scale=pose_source.scale
             )
 
             camera_pipeline.update_state(
