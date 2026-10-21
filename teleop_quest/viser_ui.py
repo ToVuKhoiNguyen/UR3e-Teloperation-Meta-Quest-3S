@@ -175,7 +175,7 @@ class TeleopViserUI:
             wxyz=quat,
             scale=0.18,
             disable_sliders=False,
-            visible=False
+            visible=True
         )
         self.server.scene.world_axes.visible = False
 

@@ -23,8 +23,8 @@ class Test3DHUD(unittest.TestCase):
         self.assertTrue(hasattr(self.ui, "_hud_frame"))
         # Mũi tên dịch chuyển đã bị gỡ bỏ hoàn toàn
         self.assertFalse(hasattr(self.ui, "_arrow_trans"))
-        # Hệ trục bàn máy (world_axes) và gizmo đã ẩn
-        self.assertFalse(self.ui._raw_gizmo.visible)
+        # Gizmo luôn hiển thị cho chuột kéo thả, hệ trục bàn máy (world_axes) ẩn
+        self.assertTrue(self.ui._raw_gizmo.visible)
         self.assertFalse(self.ui.server.scene.world_axes.visible)
         # Khối 'Hiển thị 3D' đã bị gỡ khỏi GUI
         self.assertFalse(hasattr(self.ui, "dropdown_hud_mode"))
