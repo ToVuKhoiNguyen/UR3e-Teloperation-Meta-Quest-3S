@@ -217,7 +217,7 @@ class DeltaPoseSource:
         return snapped
 
     def calibrate_desk(self, frame=None):
-        """Hiệu chuẩn hướng bàn máy khi người dùng nhấn tổ hợp Grip + B (lấy yaw của head_quat)."""
+        """Hiệu chuẩn hướng bàn máy khi người dùng nhấn nút B (lấy yaw của head_quat)."""
         if frame is None:
             frame = self.server.get_frame()
         if not frame:
@@ -235,7 +235,7 @@ class DeltaPoseSource:
                 self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
                 self._desk_u_right = np.array([1.0, 0.0, 0.0])
             desk_yaw = math.degrees(math.atan2(self._desk_u_fwd[0], -self._desk_u_fwd[2]))
-            print(f"[HIỆU CHUẨN] Bàn máy đã căn chỉnh theo kính VR (Grip + B): yaw={desk_yaw:+.1f}°")
+            print(f"[HIỆU CHUẨN] Bàn máy đã căn chỉnh theo kính VR (Nút B): yaw={desk_yaw:+.1f}°")
         else:
             self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
             self._desk_u_right = np.array([1.0, 0.0, 0.0])
@@ -246,14 +246,11 @@ class DeltaPoseSource:
         if not frame:
             return None
 
-        # 1. Hiệu chuẩn hướng bàn máy khi người dùng bấm tổ hợp phím Grip + Button B (bắt cạnh lên):
-        # Nút B đơn lẻ dành riêng cho Bật/Tắt Teleop; Tổ hợp Grip + B dùng để hiệu chuẩn bàn máy.
+        # 1. Hiệu chuẩn hướng bàn máy khi người dùng bấm Nút B (bắt cạnh lên):
+        # Khôi phục chuẩn theo stable-pyroki-2026-10-21: Bấm nút B đơn lẻ để hiệu chuẩn bàn máy
         btn_b = bool(frame.get("button_b", False) or frame.get("buttons", {}).get("button_b", False))
-        is_rotating = frame.get("grip", False)
-        calib_combo = is_rotating and btn_b
-        if calib_combo and not self._last_calib_combo:
+        if btn_b and not self._last_btn_b:
             self.calibrate_desk(frame)
-        self._last_calib_combo = calib_combo
         self._last_btn_b = btn_b
 
         # Không sinh delta pose khi đang ở Edit Mode để tránh di chuyển ngoài ý muốn

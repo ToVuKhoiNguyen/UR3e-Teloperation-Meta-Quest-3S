@@ -404,7 +404,7 @@
                             let b4 = activeSource.gamepad.buttons[4];
                             gripperRawPressed = Boolean(b4.pressed || (typeof b4.value === 'number' && b4.value > 0.5));
                         }
-                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Bật/Tắt Teleop (Grip + B để Hiệu chuẩn bàn máy)
+                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Hiệu chuẩn bàn máy
                         if (activeSource.gamepad.buttons.length > 5) {
                             let b5 = activeSource.gamepad.buttons[5];
                             btnBPressed = Boolean(b5.pressed || (typeof b5.value === 'number' && b5.value > 0.5));

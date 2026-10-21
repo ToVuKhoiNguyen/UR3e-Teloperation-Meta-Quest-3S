@@ -452,22 +452,16 @@ def main():
                     _last_scale_log_time = time.time()
                     print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {pose_source.scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
-        # C. Xử lý Nút B (hoặc Y trên tay trái):
-        # - Nếu đang bóp Grip + ấn Nút B -> Hiệu chuẩn bàn máy (Grip + B combo)
-        # - Nếu ấn Nút B đơn lẻ -> Bật/Tắt chế độ Teleop (Toggle Teleop)
+        # C. Xử lý Nút B (hoặc Y trên tay trái) - Chuẩn stable-pyroki-2026-10-21:
+        # Bấm Nút B (đơn lẻ hoặc kết hợp Grip) CHỈ dùng để Hiệu chuẩn hướng bàn máy.
+        # TUYỆT ĐỐI KHÔNG tắt Teleop / không ngắt RTDE executor khi bấm Nút B.
         btn_b_triggered = _is_btn_b and not _last_btn_b_state
         _last_btn_b_state = _is_btn_b
         if btn_b_triggered:
-            if _is_grip:
-                pose_source.calibrate_desk(vr_frame)
-                quest_server.send_haptic(intensity=0.9, duration=200)
-                ui.set_status("Hiệu chuẩn bàn máy OK")
-            else:
-                new_teleop_state = not ui.cb_teleop.value
-                ui.cb_teleop.value = new_teleop_state
-                state_str = "ACTIVE" if new_teleop_state else "INACTIVE"
-                print(f"[Teleop] Nút B -> Chuyển trạng thái Teleop: {state_str}")
-                quest_server.send_haptic(intensity=0.7, duration=150)
+            pose_source.calibrate_desk(vr_frame)
+            quest_server.send_haptic(intensity=0.8, duration=150)
+            ui.set_status("Hiệu chuẩn bàn máy OK")
+            print("[VR Teleop] Nút B ấn -> Hiệu chuẩn hướng bàn máy thành công.")
 
         # D. Cập nhật trạng thái kết nối
         ui.set_connected(quest_server.is_connected())
