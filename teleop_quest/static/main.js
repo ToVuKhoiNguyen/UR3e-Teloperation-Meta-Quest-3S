@@ -1,5 +1,6 @@
-        document.getElementById('host-ip').innerText = window.location.hostname || '127.0.0.1 (Local Preview)';
-        const statusDiv = document.getElementById('status');
+        const elHostIp = document.getElementById('host-ip');
+        if (elHostIp) elHostIp.innerText = window.location.hostname || '127.0.0.1 (Local Preview)';
+        const statusDiv = document.getElementById('status') || { innerText: '', classList: { add: ()=>{}, remove: ()=>{} } };
         const btnEnterVR = document.getElementById('btn-enter-vr');
         const btnExitVR = document.getElementById('btn-exit-vr');
         const vrOverlay = document.getElementById('vr-overlay');
@@ -255,19 +256,22 @@
         }
 
         function checkWebXR() {
-            btnEnterVR.style.display = 'flex';
             if (navigator.xr) {
                 navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
                     if (supported) {
-                        btnEnterVR.innerText = 'START IMMERSIVE VR';
+                        btnEnterVR.style.display = 'flex';
+                        btnEnterVR.innerText = 'Enter VR';
                         btnEnterVR.isVR = true;
                     } else {
-                        btnEnterVR.innerText = 'START DASHBOARD';
+                        btnEnterVR.style.display = 'none';
                         btnEnterVR.isVR = false;
                     }
+                }).catch(() => {
+                    btnEnterVR.style.display = 'none';
+                    btnEnterVR.isVR = false;
                 });
             } else {
-                btnEnterVR.innerText = 'START DASHBOARD';
+                btnEnterVR.style.display = 'none';
                 btnEnterVR.isVR = false;
             }
         }
@@ -283,11 +287,6 @@
             }
             if (xrSession) {
                 xrSession.end();
-            } else {
-                // Exit Preview Mode
-                vrOverlay.style.display = 'none';
-                document.getElementById('launcher-screen').style.display = 'flex';
-                document.body.style.backgroundColor = '#f0f0f0';
             }
         });
 
@@ -325,18 +324,13 @@
                         }).then(onSessionStarted);
                     });
                 }
-            } else {
-                // PC Preview mode
-                vrOverlay.style.display = 'flex';
-                document.getElementById('launcher-screen').style.display = 'none';
-                document.body.style.backgroundColor = '#ccc'; // Giả lập nền AR
             }
         });
 
         function onSessionStarted(session) {
             xrSession = session;
             btnEnterVR.style.display = 'none';
-            document.getElementById('launcher-screen').style.display = 'none';
+            btnExitVR.style.display = 'flex';
             vrOverlay.style.display = 'flex'; // Hiện Overlay bằng flex để căn giữa
             setDriveMode(true, true); // Luôn mặc định mở Drive Mode ngay khi vào VR để lái robot tức thì
             statusDiv.innerText = "In VR Session";
@@ -356,9 +350,9 @@
 
         function onSessionEnded(event) {
             xrSession = null;
-            btnEnterVR.style.display = 'inline-block';
-            vrOverlay.style.display = 'none'; // Ẩn Cockpit UI
-            document.getElementById('launcher-screen').style.display = 'flex';
+            btnEnterVR.style.display = 'flex';
+            btnExitVR.style.display = 'none';
+            vrOverlay.style.display = 'flex'; // Vẫn duy trì hiển thị Cockpit 2D
             statusDiv.innerText = "VR Session Ended.";
         }
 

@@ -10,8 +10,8 @@
 </head>
 
 <body>
-    <!-- LAUNCHER SCREEN (Màn hình chờ 2D) -->
-    <div id="launcher-screen">
+    <!-- LAUNCHER SCREEN (Đã ẩn mặc định để tải thẳng vào Cockpit) -->
+    <div id="launcher-screen" style="display: none;">
         <div class="launcher-card">
             <div class="launcher-header">
                 <div class="logo-circle">UR</div>
@@ -32,7 +32,6 @@
                 </div>
 
                 <div class="action-buttons">
-                    <button id="btn-enter-vr" class="btn-primary">START</button>
                 </div>
             </div>
             <div class="launcher-footer">
@@ -44,7 +43,7 @@
     <canvas id="webgl-canvas" style="display: none;"></canvas>
 
     <!-- DOM OVERLAY HUD -->
-    <div id="vr-overlay">
+    <div id="vr-overlay" style="display: flex;">
         <div id="cockpit-panel">
             <!-- Header -->
             <div class="cockpit-header">
@@ -54,7 +53,10 @@
                     <span class="title">UR3e Teleoperation</span>
                 </div>
                 <div class="header-right">
-                    <button id="btn-exit-vr" class="btn-top-menu">
+                    <button id="btn-enter-vr" class="btn-top-menu" style="background: #2563eb;">
+                        Enter VR
+                    </button>
+                    <button id="btn-exit-vr" class="btn-top-menu" style="display: none;">
                         Exit VR
                     </button>
                 </div>

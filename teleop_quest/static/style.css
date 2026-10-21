@@ -51,7 +51,7 @@ button {
 
 /* Root WebXR Overlay Container */
 #vr-overlay {
-    display: none;
+    display: flex;
     position: fixed; /* CỐ ĐỊNH VÀO MÀN HÌNH */
     top: 0;
     left: 0;
@@ -412,7 +412,7 @@ button {
     right: 0;
     bottom: 0;
     background-color: #f1f5f9;
-    display: flex;
+    display: none;
     justify-content: center;
     align-items: center;
     z-index: 100;

@@ -73,54 +73,11 @@ class StatusProxy:
 
 class TargetWidgetWrapper:
     """
-    Wrapper đồng bộ tọa độ giữa Gizmo và Mô hình tay cầm VR:
-      - Vị trí: Tay cầm đặt phía trước TCP (offset 8.5cm theo phương cánh tay/chuyển động), không bị trùng sát vào đầu tay máy.
-      - Góc quay: Đồng bộ 1:1 với Gizmo (R_ctrl = R_gizmo * R_align), tại Home đứng thẳng tự nhiên và chĩa mũi theo đúng hướng di chuyển.
+    Wrapper độc lập điều khiển Target Gizmo tại vị trí TCP cho giải nghịch học IK.
+    Tay cầm VR 3D đã được tách thành node 3D HUD riêng biệt, không còn bám theo TCP.
     """
-    def __init__(self, gizmo, ctrl_frame, offset_dist=0.085, offset_right_dist=0.075, r_align=None, get_arm_theta=None):
+    def __init__(self, gizmo, ctrl_frame=None, offset_dist=0.085, offset_right_dist=0.075, r_align=None, get_arm_theta=None):
         self._gizmo = gizmo
-        self._ctrl_frame = ctrl_frame
-        self._offset_dist = float(offset_dist)
-        self._offset_right_dist = float(offset_right_dist)
-        self._r_align = r_align
-        self._get_arm_theta = get_arm_theta
-
-        @self._gizmo.on_update
-        def _(_):
-            self._update_ctrl_pose(self._gizmo.position, self._gizmo.wxyz)
-
-    def _calc_arm_vectors(self, pos):
-        theta = None
-        if self._get_arm_theta is not None:
-            try:
-                theta = self._get_arm_theta()
-            except Exception:
-                pass
-        if theta is None:
-            x, y = pos[0], pos[1]
-            r = np.hypot(x, y)
-            theta = np.arctan2(y, x) if r > 0.03 else -np.pi / 2
-
-        c, s = np.cos(theta), np.sin(theta)
-        v_fwd = np.array([c, s, 0.0], dtype=float)
-        v_right = np.array([s, -c, 0.0], dtype=float)
-        return v_fwd, v_right
-
-    def _update_ctrl_pose(self, pos, wxyz):
-        v_fwd, v_right = self._calc_arm_vectors(pos)
-        ctrl_pos = np.array(pos, dtype=float) + self._offset_dist * v_fwd + self._offset_right_dist * v_right
-        self._ctrl_frame.position = tuple(ctrl_pos)
-        self._sync_orientation(wxyz)
-
-    def _sync_orientation(self, gizmo_wxyz):
-        if self._r_align is not None:
-            try:
-                r_gizmo = transforms3d.quaternions.quat2mat(gizmo_wxyz)
-                r_ctrl = r_gizmo @ self._r_align
-                q_ctrl = transforms3d.quaternions.mat2quat(r_ctrl)
-                self._ctrl_frame.wxyz = tuple(q_ctrl)
-            except Exception:
-                pass
 
     @property
     def position(self):
@@ -129,7 +86,6 @@ class TargetWidgetWrapper:
     @position.setter
     def position(self, val):
         self._gizmo.position = val
-        self._update_ctrl_pose(val, self._gizmo.wxyz)
 
     @property
     def wxyz(self):
@@ -138,7 +94,6 @@ class TargetWidgetWrapper:
     @wxyz.setter
     def wxyz(self, val):
         self._gizmo.wxyz = val
-        self._sync_orientation(val)
 
     @property
     def visible(self):
@@ -150,9 +105,6 @@ class TargetWidgetWrapper:
 
     def __getattr__(self, name):
         return getattr(self._gizmo, name)
-
-
-
 
 
 class TeleopViserUI:
@@ -215,7 +167,7 @@ class TeleopViserUI:
         self._ctrl_offset_dist = 0.085       # Khoảng cách an toàn 8.5cm phía trước TCP
         self._ctrl_offset_right = 0.075      # Dịch sang phải 7.5cm để quan sát song song cùng Gizmo
 
-        # 1. Tạo Gizmo transform controls độc lập tại root level (mặc định hiển thị đồng thời với tay cầm)
+        # 1. Tạo Gizmo transform controls độc lập tại root level cho bộ giải IK
         self._raw_gizmo = self.server.scene.add_transform_controls(
             "target_pose",
             depth_test=False,
@@ -226,34 +178,56 @@ class TeleopViserUI:
             visible=True
         )
 
-        # 2. Tạo Frame điều khiển tay cầm VR độc lập tại root level (đặt trước đầu tay máy 8.5cm, lệch phải 7.5cm):
-        ctrl_init_pos = tuple(np.array(pos) + self._ctrl_offset_dist * v_fwd_init + self._ctrl_offset_right * v_right_init)
-        self._ctrl_frame = self.server.scene.add_frame(
-            "vr_controller_frame",
-            position=ctrl_init_pos,
+        # 2. Target widget wrapper điều khiển Gizmo (cách ly 100% với 3D HUD)
+        self.target_widget = TargetWidgetWrapper(self._raw_gizmo)
+
+        # 3. Tạo Node 3D HUD (mặc định tại góc phải bàn máy, an toàn không che robot)
+        self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
+        self._hud_base_wxyz = init_ctrl_wxyz
+        self._init_ctrl_wxyz = init_ctrl_wxyz
+        self._hud_frame = self.server.scene.add_frame(
+            "vr_controller_hud",
+            position=tuple(self._hud_base_pos),
             wxyz=init_ctrl_wxyz,
             show_axes=False
         )
+        self._ctrl_frame = self._hud_frame  # Giữ alias cho backward-compatibility
 
-        # 3. Target widget proxy đồng bộ tọa độ và góc xoay 1:1 cho main_quest và các module khác
-        self.target_widget = TargetWidgetWrapper(
-            self._raw_gizmo,
-            self._ctrl_frame,
-            offset_dist=self._ctrl_offset_dist,
-            offset_right_dist=self._ctrl_offset_right,
-            r_align=self._r_align,
-            get_arm_theta=lambda: self._current_q0
+        # Mũi tên Vector 3D động biểu diễn hướng và cự ly tịnh tiến (Tiến/Lùi/Trái/Phải/Cao/Thấp)
+        self._arrow_trans = self.server.scene.add_arrows(
+            "vr_controller_hud/arrow_trans",
+            points=np.zeros((1, 2, 3), dtype=float),
+            colors=np.array([[0, 255, 180]], dtype=np.uint8),
+            shaft_radius=0.005,
+            head_radius=0.012,
+            head_length=0.025,
+            visible=False
         )
 
-        # 4. Nạp mô hình 3D tay cầm Meta Quest 3/3S gắn vào vr_controller_frame:
-        # - Trùng vị trí Gizmo, xoay bám sát cử động cổ tay thực tế của người dùng từ kính VR
+        # Quản lý chế độ HUD (Viewport góc màn hình vs Fixed World góc bàn máy)
+        self._hud_mode = "viewport"
+        self._client_cameras = {}
+
+        @self.server.on_client_connect
+        def _(client: viser.ClientHandle):
+            self._client_cameras[client.client_id] = client.camera
+            @client.camera.on_update
+            def _(cam):
+                if self._hud_mode == "viewport":
+                    self._sync_hud_to_camera(cam)
+
+        # 4. Nạp mô hình 3D tay cầm Meta Quest 3/3S gắn vào vr_controller_hud:
+        # - Neo độc lập tại HUD góc màn hình / góc bàn máy
         # - Độ trong suốt 60% (baseColorFactor alpha = 0.60, alphaMode = BLEND)
-        # - 5 biến thể màu sắc phản hồi trực quan phím bấm:
+        # - 8 biến thể màu sắc phản hồi trực quan phím bấm:
         #   + idle: trắng/xám (trạng thái nghỉ)
         #   + translate: xanh lá (bóp Cò)
         #   + rotate: cam/vàng (bóp Grip)
         #   + both: xanh dương ngọc (giữ cả Cò + Grip)
         #   + gripper: tím hồng (bấm nút A hút/kẹp)
+        #   + btn_b: vàng kim (nút B/Y)
+        #   + joystick: tím violet (analog tilt)
+        #   + home: xanh dương đậm (lệnh Home)
         self._ctrl_handles = {}
         self._current_ctrl_mode = "idle"
         ctrl_variants = {
@@ -274,7 +248,7 @@ class TeleopViserUI:
                     with open(target_file, "rb") as f:
                         glb_bytes = f.read()
                     self._ctrl_handles[mode] = self.server.scene.add_glb(
-                        f"vr_controller_frame/controller_{mode}",
+                        f"vr_controller_hud/controller_{mode}",
                         glb_data=glb_bytes,
                         position=(0.0, 0.0, 0.0),
                         wxyz=(1.0, 0.0, 0.0, 0.0),
@@ -428,6 +402,26 @@ class TeleopViserUI:
             def _(_):
                 self.update_controller_visual()
 
+            self.dropdown_hud_mode = self.server.gui.add_dropdown(
+                "Chế độ HUD",
+                options=["Góc Màn Hình (Viewport)", "Góc Bàn Máy (Fixed World)"],
+                initial_value="Góc Màn Hình (Viewport)"
+            )
+
+            @self.dropdown_hud_mode.on_update
+            def _(_):
+                if "viewport" in self.dropdown_hud_mode.value.lower() or "màn hình" in self.dropdown_hud_mode.value.lower():
+                    self._hud_mode = "viewport"
+                    for cam in self._client_cameras.values():
+                        self._sync_hud_to_camera(cam)
+                        break
+                else:
+                    self._hud_mode = "fixed_world"
+                    self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
+                    self._hud_base_wxyz = self._init_ctrl_wxyz
+                    self._hud_frame.position = tuple(self._hud_base_pos)
+                    self._hud_frame.wxyz = self._init_ctrl_wxyz
+
 
     def get_camera_view_mode(self) -> str:
         """Lấy chế độ xem camera (Mặc định 'rgb' do đã gỡ bỏ UI điều khiển trên Viser)"""
@@ -480,6 +474,35 @@ class TeleopViserUI:
     def set_grasp_state(self, is_grasped: bool):
         self.ui_grasp_state.value = "Holding" if is_grasped else "Empty"
 
+    def _sync_hud_to_camera(self, cam):
+        """Tính toán neo 3D HUD cố định tại góc dưới bên phải màn hình theo camera hiện tại"""
+        try:
+            r_cam = transforms3d.quaternions.quat2mat(cam.wxyz)
+            # Quy ước OpenCV của Viser: +X right, +Y down, +Z fwd
+            u_right = r_cam[:, 0]
+            u_down = r_cam[:, 1]
+            u_fwd = r_cam[:, 2]
+
+            # Đặt cách camera 0.55m, lệch phải 0.20m, lệch xuống 0.14m
+            d_fwd = 0.55
+            s_right = 0.20
+            s_down = 0.14
+            self._hud_base_pos = np.array(cam.position) + d_fwd * u_fwd + s_right * u_right + s_down * u_down
+
+            # Hướng mặt điều khiển tay cầm nghiêng tự nhiên về phía camera
+            r_tilt = np.array([
+                [1.0,  0.0,     0.0],
+                [0.0,  0.866, -0.500],
+                [0.0,  0.500,  0.866]
+            ], dtype=float)
+            r_base = r_cam @ r_tilt
+            self._hud_base_wxyz = tuple(transforms3d.quaternions.mat2quat(r_base))
+            if not hasattr(self, "_current_ctrl_mode") or self._current_ctrl_mode == "idle":
+                self._hud_frame.position = tuple(self._hud_base_pos)
+                self._hud_frame.wxyz = self._hud_base_wxyz
+        except Exception:
+            pass
+
     def update_controller_visual(
         self,
         is_translating: bool = False,
@@ -487,24 +510,24 @@ class TeleopViserUI:
         is_gripper_btn: bool = False,
         is_btn_b: bool = False,
         is_joystick: bool = False,
-        is_home: bool = False
+        is_home: bool = False,
+        delta_trans: np.ndarray = None,
+        vr_quat: list = None
     ):
         """
-        Cập nhật màu sắc phím bấm của mô hình tay cầm VR theo thời gian thực (8 trạng thái màu độc lập):
-          - Bóp Cò (Trigger): Sáng xanh lá (Tịnh tiến).
-          - Bóp Grip: Sáng cam (Xoay 3 trục).
-          - Giữ cả Cò + Grip: Sáng xanh dương ngọc (Phối hợp 6-DOF).
-          - Bấm nút A (Gripper Toggle): Sáng tím hồng (Đóng/mở hút kẹp).
-          - Bấm nút B / Y: Sáng vàng kim (Đổi Drive Mode).
-          - Gạt cần Joystick: Sáng tím Violet (Điều hướng / Analog tilt).
-          - Nhấn Joystick / Về Home: Sáng xanh dương đậm Royal Blue (Lệnh Go Home).
-          - Trạng thái nghỉ: Xám trắng tự nhiên (60% độ trong suốt).
+        Cập nhật hiển thị toàn diện của 3D HUD:
+          1. Nút bấm: Đổi màu sắc model GLB theo 8 biến thể.
+          2. Hướng xoay: Đồng bộ góc xoay cổ tay qua vr_quat.
+          3. Dịch chuyển tịnh tiến: Cập nhật mũi tên 3D và độ đàn hồi vi mô.
         """
         if not hasattr(self, "cb_show_controller") or not self.cb_show_controller.value:
             for h in self._ctrl_handles.values():
                 h.visible = False
+            if hasattr(self, "_arrow_trans"):
+                self._arrow_trans.visible = False
             return
 
+        # 1. Quản lý biến thể màu sắc nút bấm
         if is_home:
             target_mode = "home"
         elif is_joystick:
@@ -526,4 +549,60 @@ class TeleopViserUI:
             self._current_ctrl_mode = target_mode
             for mode, h in self._ctrl_handles.items():
                 h.visible = (mode == target_mode)
+
+        # 2. Quản lý góc xoay tay cầm (Quaternion Sync)
+        if vr_quat is not None and len(vr_quat) == 4:
+            try:
+                q = np.array(vr_quat, dtype=float)
+                norm_q = np.linalg.norm(q)
+                if norm_q > 1e-4:
+                    q /= norm_q
+                    r_wrist = transforms3d.quaternions.quat2mat(q)
+                    r_hud = r_wrist @ self._r_align
+                    self._hud_frame.wxyz = tuple(transforms3d.quaternions.mat2quat(r_hud))
+            except Exception:
+                pass
+        elif hasattr(self, "_hud_base_wxyz"):
+            self._hud_frame.wxyz = self._hud_base_wxyz
+
+        # 3. Quản lý phản hồi tịnh tiến (Mũi tên Vector 3D & Độ đàn hồi vi mô)
+        if hasattr(self, "_arrow_trans") and hasattr(self, "_hud_frame"):
+            if is_translating and delta_trans is not None and len(delta_trans) == 3:
+                d_fwd = float(delta_trans[0])
+                d_lat = float(delta_trans[1])
+                d_vert = float(delta_trans[2])
+                mag = float(np.hypot(np.hypot(d_fwd, d_lat), d_vert))
+
+                if mag > 0.002:  # Ngưỡng nhạy 2mm
+                    # A. Đàn hồi vi mô (Micro-displacement tối đa 2.5cm)
+                    k_spring = min(0.12, 0.025 / (mag + 1e-6))
+                    disp = np.array([d_lat, -d_fwd, d_vert], dtype=float) * k_spring
+                    self._hud_frame.position = tuple(self._hud_base_pos + disp)
+
+                    # B. Mũi tên 3D động biểu diễn hướng và độ lớn
+                    arrow_len = min(0.16, max(0.04, mag * 1.3))
+                    u_dir = np.array([d_lat, -d_fwd, d_vert], dtype=float) / mag
+                    p_start = np.array([0.0, 0.0, 0.02], dtype=float)
+                    p_end = p_start + u_dir * arrow_len
+                    self._arrow_trans.points = np.array([[p_start, p_end]], dtype=float)
+
+                    # Đổi màu mũi tên trực quan theo hướng chiếm ưu thế
+                    if abs(d_fwd) >= abs(d_lat) and abs(d_fwd) >= abs(d_vert):
+                        # Tiến: Xanh ngọc Neon, Lùi: Vàng hổ phách
+                        col = np.array([[0, 255, 180]], dtype=np.uint8) if d_fwd >= 0 else np.array([[255, 190, 0]], dtype=np.uint8)
+                    elif abs(d_lat) >= abs(d_vert):
+                        # Phải/Trái: Xanh dương điện quang
+                        col = np.array([[0, 160, 255]], dtype=np.uint8)
+                    else:
+                        # Cao/Thấp: Tím huỳnh quang
+                        col = np.array([[220, 60, 255]], dtype=np.uint8)
+
+                    self._arrow_trans.colors = col
+                    self._arrow_trans.visible = True
+                else:
+                    self._arrow_trans.visible = False
+                    self._hud_frame.position = tuple(self._hud_base_pos)
+            else:
+                self._arrow_trans.visible = False
+                self._hud_frame.position = tuple(self._hud_base_pos)
 
