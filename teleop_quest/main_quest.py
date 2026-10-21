@@ -64,6 +64,66 @@ def register_ui_callbacks(
     """Đăng ký sự kiện các nút bấm trên giao diện Viser UI"""
     placed_at_start = [0]
 
+    @ui.cb_teleop.on_update
+    def _on_teleop_update(_):
+        t0 = time.perf_counter()
+        is_enabled = bool(ui.cb_teleop.value)
+        teleop.enabled = is_enabled
+        quest_server.set_drive_mode(is_enabled)
+        if is_enabled:
+            print(f"[Viser UI Event] Người dùng BẬT Teleop từ giao diện.")
+            widget_pose_source.sync_with_robot()
+            try:
+                teleop._last_valid_q = list(ctrl.joints())
+            except Exception:
+                pass
+            executor.connect()
+            ui.set_status("Tracking")
+        else:
+            print(f"[Viser UI Event] Người dùng TẮT Teleop từ giao diện.")
+            executor.disconnect()
+            ui.set_status("Tắt")
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        print(f"[Viser UI Event] Đã cập nhật trạng thái Teleop: {is_enabled} (Độ trễ: {latency_ms:.2f}ms)")
+
+    @ui.cb_gripper.on_update
+    def _on_gripper_update(_):
+        t0 = time.perf_counter()
+        is_closed = bool(ui.cb_gripper.value)
+        quest_server.send_haptic(intensity=0.9 if is_closed else 0.4, duration=150)
+        state_str = "HÚT/KẸP (ON)" if is_closed else "THẢ/NHẢ (OFF)"
+        print(f"[Viser UI Event] Người dùng click Gripper: {state_str}")
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        print(f"[Viser UI Event] Đã cập nhật trạng thái Gripper: {is_closed} (Độ trễ: {latency_ms:.2f}ms)")
+
+    if hasattr(ui, "ui_cam_mode"):
+        @ui.ui_cam_mode.on_update
+        def _on_cam_mode_update(_):
+            t0 = time.perf_counter()
+            mode_str = ui.get_camera_view_mode()
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[Viser UI Event] Đổi chế độ xem Camera: {ui.ui_cam_mode.value} -> '{mode_str}' (Độ trễ: {latency_ms:.2f}ms)")
+
+    if hasattr(ui, "ui_status") and hasattr(ui.ui_status, "on_update"):
+        @ui.ui_status.on_update
+        def _on_status_update(_):
+            t0 = time.perf_counter()
+            st_val = str(ui.ui_status.value)
+            if quest_server:
+                quest_server.broadcast_robot_telemetry(status=st_val)
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"[Viser UI Event] Trạng thái Robot cập nhật: '{st_val}' (Độ trễ: {latency_ms:.2f}ms)")
+
+    if hasattr(ui, "_raw_gizmo"):
+        @ui._raw_gizmo.on_update
+        def _on_gizmo_update(_):
+            t0 = time.perf_counter()
+            _ = ui._raw_gizmo.position
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            if not hasattr(_on_gizmo_update, "_last_log") or (time.time() - _on_gizmo_update._last_log > 2.0):
+                _on_gizmo_update._last_log = time.time()
+                print(f"[Viser UI Event] Tương tác 3D Transform Gizmo (Độ trễ: {latency_ms:.2f}ms)")
+
     @ui.cb_record.on_update
     def _on_record_update(_):
         if ui.cb_record.value:
