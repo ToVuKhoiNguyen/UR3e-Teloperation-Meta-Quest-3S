@@ -83,7 +83,8 @@ def register_ui_callbacks(
             ui.set_status("Tracking")
         else:
             print(f"[Viser UI Event] Người dùng TẮT Teleop từ giao diện.")
-            executor.disconnect()
+            executor.stop(10.0)
+            teleop.stop(10.0)
             ui.set_status("Tắt")
         latency_ms = (time.perf_counter() - t0) * 1000.0
         print(f"[Viser UI Event] Đã cập nhật trạng thái Teleop: {is_enabled} (Độ trễ: {latency_ms:.2f}ms)")
@@ -361,10 +362,9 @@ def main():
     _last_vr_gripper_raw = False
     _last_viser_cb_val = False
     _last_btn_b_state = False
+    _last_thumbstick_click_state = False
     _last_trig_state = False
     _last_grip_state = False
-    _thumbstick_press_start_time = 0.0
-    _thumbstick_home_triggered = False
     _last_scale_log_time = 0.0
 
     # 8. Vòng lặp điều khiển chính (20Hz)
@@ -409,32 +409,20 @@ def main():
         if vr_frame and vr_frame.get("thumbstick", False) and not _is_home and not _is_joy_tilt:
             _is_joy_tilt = True
 
-        # B1. Xử lý sự kiện nhấn cần Joystick (Thumbstick Click) -> Về Home an toàn
-        # Ràng buộc an toàn:
-        # - Chống bấm nhầm: Yêu cầu nhấn giữ liên tục >= 0.5s
-        # - Khóa an toàn: Không kích hoạt khi đang bóp cò (_is_trig) hoặc đang giữ grip (_is_grip)
-        # - Chống chạy chồng: Không kích hoạt khi đang thực hiện Go Home (is_navigating_home.is_set())
-        if _is_thumbstick_click:
+        # B1. Xử lý sự kiện nhấn cần Joystick (Thumbstick Click) -> Về Home an toàn (Bắt cạnh lên rising edge)
+        # Khóa an toàn: Không kích hoạt khi đang bóp cò (_is_trig), đang giữ grip (_is_grip), hoặc đang về Home
+        thumbstick_clicked = _is_thumbstick_click and not _last_thumbstick_click_state
+        _last_thumbstick_click_state = _is_thumbstick_click
+
+        if thumbstick_clicked:
             if _is_trig or _is_grip:
-                if _thumbstick_press_start_time > 0.0:
-                    print("[VR Teleop] Bỏ qua nhấn Joystick Go Home vì đang bóp cò/grip điều khiển.")
-                _thumbstick_press_start_time = 0.0
-                _thumbstick_home_triggered = False
-            elif is_navigating_home.is_set():
-                pass
-            else:
-                if _thumbstick_press_start_time == 0.0:
-                    _thumbstick_press_start_time = time.time()
-                elif (time.time() - _thumbstick_press_start_time >= 0.5) and not _thumbstick_home_triggered:
-                    _thumbstick_home_triggered = True
-                    t_click = time.perf_counter()
-                    quest_server.send_haptic(intensity=1.0, duration=300)
-                    trigger_go_home(source_name="VR Thumbstick Click (Giữ ≥ 0.5s)")
-                    latency_ms = (time.perf_counter() - t_click) * 1000.0
-                    print(f"[VR Teleop] Nhấn giữ Joystick đủ 0.5s -> Kích hoạt Go Home an toàn (Độ trễ khởi tạo: {latency_ms:.2f}ms)")
-        else:
-            _thumbstick_press_start_time = 0.0
-            _thumbstick_home_triggered = False
+                print("[VR Teleop] Bỏ qua nhấn Joystick Go Home vì đang bóp cò/grip điều khiển.")
+            elif not is_navigating_home.is_set():
+                t_click = time.perf_counter()
+                quest_server.send_haptic(intensity=1.0, duration=250)
+                trigger_go_home(source_name="VR Thumbstick Click")
+                latency_ms = (time.perf_counter() - t_click) * 1000.0
+                print(f"[VR Teleop] Nhấn Joystick -> Kích hoạt Go Home an toàn tức thì (Độ trễ: {latency_ms:.2f}ms)")
 
         # B2. Tinh chỉnh độ nhạy (Scale) bằng cần Analog dọc (Thumbstick Y) theo thời gian thực
         thumbstick_axes = vr_frame.get("thumbstick_axes", [0.0, 0.0]) if vr_frame else [0.0, 0.0]
@@ -457,16 +445,23 @@ def main():
                 _last_scale_log_time = time.time()
                 print(f"[VR Teleop] Thumbstick Y ({stick_y:+.2f}) -> Cập nhật Scale: {snapped_scale:.2f}x (Độ trễ: {latency_ms:.2f}ms)")
 
-        # C. Xử lý Nút B (hoặc Y trên tay trái) - Chuẩn stable-pyroki-2026-10-21:
-        # Bấm Nút B (đơn lẻ hoặc kết hợp Grip) CHỈ dùng để Hiệu chuẩn hướng bàn máy.
-        # TUYỆT ĐỐI KHÔNG tắt Teleop / không ngắt RTDE executor khi bấm Nút B.
+        # C. Xử lý Nút B (hoặc Y trên tay trái):
+        # - Nếu đang bóp Grip + ấn Nút B -> Hiệu chuẩn bàn máy (Grip + B combo)
+        # - Nếu ấn Nút B đơn lẻ -> Bật/Tắt chế độ Teleop (Toggle Teleop)
         btn_b_triggered = _is_btn_b and not _last_btn_b_state
         _last_btn_b_state = _is_btn_b
         if btn_b_triggered:
-            pose_source.calibrate_desk(vr_frame)
-            quest_server.send_haptic(intensity=0.8, duration=150)
-            ui.set_status("Hiệu chuẩn bàn máy OK")
-            print("[VR Teleop] Nút B ấn -> Hiệu chuẩn hướng bàn máy thành công.")
+            if _is_grip:
+                pose_source.calibrate_desk(vr_frame)
+                quest_server.send_haptic(intensity=0.8, duration=150)
+                ui.set_status("Hiệu chuẩn bàn máy OK")
+                print("[VR Teleop] Grip + Nút B -> Hiệu chuẩn hướng bàn máy thành công.")
+            else:
+                new_teleop_state = not ui.cb_teleop.value
+                ui.cb_teleop.value = new_teleop_state
+                state_str = "BẬT" if new_teleop_state else "TẮT"
+                print(f"[VR Teleop] Nút B ấn -> Chuyển trạng thái Teleop: {state_str}")
+                quest_server.send_haptic(intensity=0.7, duration=150)
 
         # D. Cập nhật trạng thái kết nối
         ui.set_connected(quest_server.is_connected())
@@ -493,8 +488,9 @@ def main():
                     watchdog.arm()
                 ui.set_status("Tracking")
             else:
-                print("[Teleop] HỦY KÍCH HOẠT ĐIỀU KHIỂN.")
-                executor.disconnect()
+                print("[Teleop] HỦY KÍCH HOẠT ĐIỀU KHIỂN (TẠM DỪNG).")
+                executor.stop(10.0)
+                teleop.stop(10.0)
                 watchdog.disarm()
                 ui.set_status("Tắt")
 

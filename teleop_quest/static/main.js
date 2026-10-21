@@ -412,21 +412,33 @@
                             let b4 = activeSource.gamepad.buttons[4];
                             gripperRawPressed = Boolean(b4.pressed || (typeof b4.value === 'number' && b4.value > 0.5));
                         }
-                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Hiệu chuẩn bàn máy
+                        // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Bật/Tắt Teleop (Grip + B để Hiệu chuẩn bàn máy)
                         if (activeSource.gamepad.buttons.length > 5) {
                             let b5 = activeSource.gamepad.buttons[5];
                             btnBPressed = Boolean(b5.pressed || (typeof b5.value === 'number' && b5.value > 0.5));
                         }
                     }
 
-                    // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nhấn L3 hoặc nút X)
+                    // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nhấn L3, nút X, hoặc nút Y)
                     for (let s of session.inputSources) {
                         if (s !== activeSource && s.gamepad && s.gamepad.buttons) {
-                            if (s.gamepad.buttons.length > 3 && s.gamepad.buttons[3].pressed) {
-                                thumbstickClickPressed = true;
+                            if (s.gamepad.buttons.length > 3) {
+                                let b3_sub = s.gamepad.buttons[3];
+                                if (b3_sub.pressed || (typeof b3_sub.value === 'number' && b3_sub.value > 0.5)) {
+                                    thumbstickClickPressed = true;
+                                }
                             }
-                            if (s.gamepad.buttons.length > 4 && s.gamepad.buttons[4].pressed) {
-                                gripperRawPressed = true;
+                            if (s.gamepad.buttons.length > 4) {
+                                let b4_sub = s.gamepad.buttons[4];
+                                if (b4_sub.pressed || (typeof b4_sub.value === 'number' && b4_sub.value > 0.5)) {
+                                    gripperRawPressed = true;
+                                }
+                            }
+                            if (s.gamepad.buttons.length > 5) {
+                                let b5_sub = s.gamepad.buttons[5];
+                                if (b5_sub.pressed || (typeof b5_sub.value === 'number' && b5_sub.value > 0.5)) {
+                                    btnBPressed = true;
+                                }
                             }
                         }
                     }

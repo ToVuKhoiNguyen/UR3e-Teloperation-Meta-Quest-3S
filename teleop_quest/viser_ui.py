@@ -316,7 +316,9 @@ class TeleopViserUI:
             div:has(> div > #teleop-2x2-anchor) > div:nth-child(1),
             div:has(> div > #teleop-2x2-anchor) > div:nth-child(2),
             div:has(> div > #teleop-2x2-anchor) > div:nth-child(8),
-            div:has(> div > #teleop-2x2-anchor) > div:nth-child(9) {
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(9),
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(10),
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(11) {
                 width: 100% !important;
             }
             div:has(> div > #teleop-2x2-anchor) > div:nth-child(4),
@@ -335,11 +337,17 @@ class TeleopViserUI:
                 width: 100% !important;
                 padding-bottom: 0 !important;
             }
-            div:has(> div > #teleop-2x2-anchor) .mantine-Flex-root {
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(4) .mantine-Flex-root,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(5) .mantine-Flex-root,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(6) .mantine-Flex-root,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(7) .mantine-Flex-root {
                 justify-content: space-between !important;
                 width: 100% !important;
             }
-            div:has(> div > #teleop-2x2-anchor) .mantine-Flex-root > div:first-child {
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(4) .mantine-Flex-root > div:first-child,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(5) .mantine-Flex-root > div:first-child,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(6) .mantine-Flex-root > div:first-child,
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(7) .mantine-Flex-root > div:first-child {
                 width: auto !important;
                 padding-right: 4px !important;
             }
@@ -347,6 +355,10 @@ class TeleopViserUI:
                 height: 28px !important;
                 padding: 0 4px !important;
                 font-size: 0.85em !important;
+            }
+            div:has(> div > #teleop-2x2-anchor) > div:nth-child(11) .mantine-Slider-root {
+                flex-grow: 1 !important;
+                min-width: 80px !important;
             }
             </style>
             """)
@@ -367,7 +379,7 @@ class TeleopViserUI:
 
             # 4. Thanh trượt tinh chỉnh độ nhạy di chuyển (Scale) theo thời gian thực
             self.slider_sensitivity = self.server.gui.add_slider(
-                "Độ nhạy di chuyển (Scale)",
+                "Độ nhạy (Scale)",
                 min=0.25,
                 max=3.0,
                 step=0.05,
