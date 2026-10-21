@@ -18,6 +18,20 @@
         const elValQw = document.getElementById('val-qw');
         const elValMode = document.getElementById('val-mode');
 
+        // PolyScope Robot Parameters DOM bindings
+        const elValTcpX = document.getElementById('val-tcp-x');
+        const elValTcpY = document.getElementById('val-tcp-y');
+        const elValTcpZ = document.getElementById('val-tcp-z');
+        const elValTcpRx = document.getElementById('val-tcp-rx');
+        const elValTcpRy = document.getElementById('val-tcp-ry');
+        const elValTcpRz = document.getElementById('val-tcp-rz');
+
+        const jointIds = ['base', 'shoulder', 'elbow', 'wrist1', 'wrist2', 'wrist3'];
+        const elJointDeg = jointIds.map(j => document.getElementById(`val-${j}-deg`));
+        const elJointRad = jointIds.map(j => document.getElementById(`val-${j}-rad`));
+        const elJointPtr = jointIds.map(j => document.getElementById(`ptr-${j}`));
+        const elValGripperState = document.getElementById('val-gripper-state');
+
         let ws = null;
         let xrSession = null;
         let xrRefSpace = null;
@@ -42,34 +56,63 @@
         let isWsActive = false;
         let lastTelemetryTime = 0;
 
+        function quatToRotVec(w, x, y, z) {
+            let angle = 2 * Math.acos(Math.max(-1, Math.min(1, w)));
+            let s = Math.sqrt(Math.max(0, 1 - w * w));
+            if (s < 0.0001 || angle < 0.0001) return [0, 0, 0];
+            return [(x / s) * angle, (y / s) * angle, (z / s) * angle];
+        }
+
         function updateTelemetryUI(data) {
             if (!data) return;
 
-            // 1. Cập nhật ROBOT POSE (Position & Orientation)
+            // 1. Cập nhật Tool Position (X, Y, Z in mm và RX, RY, RZ in rad)
+            if (data.tcp_mm && data.tcp_mm.length >= 3) {
+                if (elValTcpX) elValTcpX.innerText = data.tcp_mm[0].toFixed(2);
+                if (elValTcpY) elValTcpY.innerText = data.tcp_mm[1].toFixed(2);
+                if (elValTcpZ) elValTcpZ.innerText = data.tcp_mm[2].toFixed(2);
+            } else if (data.pos && data.pos.length >= 3) {
+                if (elValTcpX) elValTcpX.innerText = (data.pos[0] * 1000.0).toFixed(2);
+                if (elValTcpY) elValTcpY.innerText = (data.pos[1] * 1000.0).toFixed(2);
+                if (elValTcpZ) elValTcpZ.innerText = (data.pos[2] * 1000.0).toFixed(2);
+            }
+
+            if (data.rotvec && data.rotvec.length >= 3) {
+                if (elValTcpRx) elValTcpRx.innerText = data.rotvec[0].toFixed(3);
+                if (elValTcpRy) elValTcpRy.innerText = data.rotvec[1].toFixed(3);
+                if (elValTcpRz) elValTcpRz.innerText = data.rotvec[2].toFixed(3);
+            } else if (data.quat && data.quat.length >= 4) {
+                let rotv = quatToRotVec(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
+                if (elValTcpRx) elValTcpRx.innerText = rotv[0].toFixed(3);
+                if (elValTcpRy) elValTcpRy.innerText = rotv[1].toFixed(3);
+                if (elValTcpRz) elValTcpRz.innerText = rotv[2].toFixed(3);
+            }
+
+            // Fallback backward compatibility for legacy pose elements if present
             if (data.pos && data.pos.length >= 3) {
                 if (elValX) elValX.innerText = data.pos[0].toFixed(3);
                 if (elValY) elValY.innerText = data.pos[1].toFixed(3);
                 if (elValZ) elValZ.innerText = data.pos[2].toFixed(3);
             }
             if (data.quat && data.quat.length >= 4) {
-                // Backend gửi [qw, qx, qy, qz]
                 if (elValQw) elValQw.innerText = data.quat[0].toFixed(3);
                 if (elValQx) elValQx.innerText = data.quat[1].toFixed(3);
                 if (elValQy) elValQy.innerText = data.quat[2].toFixed(3);
                 if (elValQz) elValQz.innerText = data.quat[3].toFixed(3);
             }
 
-            // 2. Cập nhật Robot Status Badge
-            const elRobotStatus = document.getElementById('robot-status-badge');
-            if (elRobotStatus && data.status) {
-                elRobotStatus.innerText = data.status;
-                let st = data.status.toLowerCase();
-                if (st.includes('tracking') || st.includes('home') || st.includes('bật') || st.includes('sẵn sàng') || st.includes('standby')) {
-                    elRobotStatus.className = 'badge green';
-                } else if (st.includes('lỗi') || st.includes('error') || st.includes('stop') || st.includes('kẹt')) {
-                    elRobotStatus.className = 'badge red';
-                } else {
-                    elRobotStatus.className = 'badge orange';
+            // 2. Cập nhật Joint Position (6 joints: Base, Shoulder, Elbow, Wrist 1, Wrist 2, Wrist 3)
+            if (data.joints && data.joints.length >= 6) {
+                for (let i = 0; i < 6; i++) {
+                    let rad = data.joints[i];
+                    let deg = rad * (180.0 / Math.PI);
+                    if (elJointDeg[i]) elJointDeg[i].innerText = deg.toFixed(2);
+                    if (elJointRad[i]) elJointRad[i].innerText = `(${rad.toFixed(2)} rad)`;
+                    if (elJointPtr[i]) {
+                        // Thang đo UR [-360 deg, +360 deg] -> range [0%, 100%]
+                        let pct = Math.max(0, Math.min(100, ((deg + 360.0) / 720.0) * 100.0));
+                        elJointPtr[i].style.left = `${pct.toFixed(1)}%`;
+                    }
                 }
             }
 
@@ -81,36 +124,26 @@
                 isGripperClosed = Boolean(data.controller.gripper_btn);
             }
             gripperClosedState = isGripperClosed;
+            if (elValGripperState) {
+                elValGripperState.innerText = isGripperClosed ? "Closed (Suction ON)" : "Open (Suction OFF)";
+                elValGripperState.className = isGripperClosed ? "badge red" : "badge gray";
+            }
             if (elValGripperBtn) {
                 elValGripperBtn.innerText = isGripperClosed ? "Closed (Suction ON)" : "Open (Suction OFF)";
                 elValGripperBtn.className = isGripperClosed ? "badge red" : "badge gray";
             }
 
-            // 4. Cập nhật VR CONTROLLER Card (cho màn hình quan sát PC hoặc khi không trong phiên XR)
-            if (!xrSession && data.controller) {
-                const ctrl = data.controller;
-                if (elValSource) {
-                    if (ctrl.connected) {
-                        elValSource.innerText = ctrl.hand || "Right Hand";
-                        elValSource.style.color = "#10b981";
-                        elValSource.style.fontWeight = "bold";
-                    } else {
-                        elValSource.innerText = "Waiting...";
-                        elValSource.style.color = "#64748b";
-                        elValSource.style.fontWeight = "normal";
-                    }
-                }
-                if (elValTrigger) {
-                    elValTrigger.innerText = ctrl.trigger ? "Pressed" : "Released";
-                    elValTrigger.className = ctrl.trigger ? "badge red" : "badge gray";
-                }
-                if (elValGrip) {
-                    elValGrip.innerText = ctrl.grip ? "Pressed" : "Released";
-                    elValGrip.className = ctrl.grip ? "badge red" : "badge gray";
-                }
-                if (elValMode && typeof ctrl.drive_mode !== 'undefined') {
-                    elValMode.innerText = ctrl.drive_mode ? "Drive Mode" : "Edit Mode";
-                    elValMode.className = ctrl.drive_mode ? "badge green" : "badge orange";
+            // 4. Cập nhật Robot Status Badge
+            const elRobotStatus = document.getElementById('robot-status-badge');
+            if (elRobotStatus && data.status) {
+                elRobotStatus.innerText = data.status;
+                let st = data.status.toLowerCase();
+                if (st.includes('tracking') || st.includes('home') || st.includes('bật') || st.includes('sẵn sàng') || st.includes('standby')) {
+                    elRobotStatus.className = 'badge green';
+                } else if (st.includes('lỗi') || st.includes('error') || st.includes('stop') || st.includes('kẹt')) {
+                    elRobotStatus.className = 'badge red';
+                } else {
+                    elRobotStatus.className = 'badge orange';
                 }
             }
         }

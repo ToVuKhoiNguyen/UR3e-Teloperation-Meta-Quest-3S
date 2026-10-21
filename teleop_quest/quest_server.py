@@ -140,7 +140,7 @@ class QuestServer:
                 except Exception:
                     pass
 
-    def broadcast_robot_telemetry(self, pos, quat, status: str = "OK", gripper: bool = False, joints: list = None):
+    def broadcast_robot_telemetry(self, pos, quat, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None):
         """Phát tọa độ TCP thực tế, quaternion và trạng thái robot + VR controller tới WebXR Cockpit HUD."""
         with self._lock:
             clients = list(self._clients)
@@ -181,6 +181,10 @@ class QuestServer:
             with self._lock:
                 if len(joints) > 0:
                     self._latest_q0 = float(joints[0])
+
+        if tcp_pose is not None and len(tcp_pose) >= 6:
+            msg_dict["rotvec"] = [round(float(tcp_pose[3]), 3), round(float(tcp_pose[4]), 3), round(float(tcp_pose[5]), 3)]
+            msg_dict["tcp_mm"] = [round(float(tcp_pose[0]) * 1000.0, 2), round(float(tcp_pose[1]) * 1000.0, 2), round(float(tcp_pose[2]) * 1000.0, 2)]
 
         msg_bytes = json.dumps(msg_dict).encode("utf-8")
         with self._lock:

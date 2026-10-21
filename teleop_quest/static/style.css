@@ -540,3 +540,203 @@ button {
     font-size: 12px;
     border-top: 1px solid #e2e8f0;
 }
+
+/* ==========================================================================
+   PolyScope Robot Parameters Panel (Tool Position & Joint Position)
+   ========================================================================== */
+.ur-params-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+    border: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+}
+
+.ur-sec {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ur-sec-hdr {
+    background: #94a3b8;
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 5px 12px;
+    letter-spacing: 0.3px;
+    text-transform: none;
+}
+
+.ur-tcp-body {
+    padding: 8px 10px;
+}
+
+.ur-tcp-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 4px 4px;
+}
+
+.ur-tcp-lbl {
+    font-weight: 700;
+    font-size: 13px;
+    color: #334155;
+    width: 20px;
+    text-align: right;
+}
+
+.ur-tcp-val-box {
+    background: #ffffff;
+    border: 1.5px solid #94a3b8;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    text-align: right;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+}
+
+.ur-tcp-unit {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 500;
+    width: 26px;
+    padding-left: 2px;
+}
+
+/* Joint Position styling */
+.ur-joints-body {
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ur-joint-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.ur-joint-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.ur-joint-arr {
+    color: #0284c7;
+    font-size: 14px;
+    user-select: none;
+    line-height: 1;
+}
+
+.ur-joint-label-group {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    flex: 1;
+    margin: 0 6px;
+}
+
+.ur-joint-name {
+    font-weight: 700;
+    font-size: 12px;
+    color: #1e293b;
+}
+
+.ur-joint-rad {
+    font-size: 11px;
+    color: #64748b;
+    font-weight: 500;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.ur-joint-val-box {
+    background: #ffffff;
+    border: 1.5px solid #94a3b8;
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #0f172a;
+    text-align: right;
+    min-width: 60px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+}
+
+.ur-joint-deg-unit {
+    font-size: 12px;
+    font-weight: 700;
+    color: #334155;
+    margin: 0 4px 0 2px;
+}
+
+.ur-track-wrap {
+    position: relative;
+    height: 8px;
+    background: #e2e8f0;
+    border: 1px solid #94a3b8;
+    border-radius: 2px;
+    margin: 3px 16px 4px 16px;
+}
+
+.ur-track-tick-mid {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #64748b;
+}
+
+.ur-track-tick-q1 {
+    position: absolute;
+    left: 25%;
+    top: 1px;
+    bottom: 1px;
+    width: 1px;
+    background: #94a3b8;
+}
+
+.ur-track-tick-q3 {
+    position: absolute;
+    left: 75%;
+    top: 1px;
+    bottom: 1px;
+    width: 1px;
+    background: #94a3b8;
+}
+
+.ur-track-pointer {
+    position: absolute;
+    bottom: -6px;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 6px solid #0f172a;
+    transition: left 0.05s linear;
+}
+
+.ur-status-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ur-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}

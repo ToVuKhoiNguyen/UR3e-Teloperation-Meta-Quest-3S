@@ -492,12 +492,19 @@ def main():
         if fk_res is not None:
             ui.update_robot_state(q_real)
 
+            tcp_cur = None
+            try:
+                tcp_cur = ctrl.tcp()
+            except Exception:
+                pass
+
             quest_server.broadcast_robot_telemetry(
                 pos=fk_res["pos"],
                 quat=fk_res["quat"],
                 status=str(ui.ui_status.value),
                 gripper=_gripper_active,
-                joints=q_real
+                joints=q_real,
+                tcp_pose=tcp_cur
             )
 
             camera_pipeline.update_state(

@@ -100,96 +100,172 @@
                         </div>
                     </div>
 
-                    <!-- Card 2: Input Controller -->
-                    <div class="status-card">
-                        <div class="card-title">VR CONTROLLER</div>
-                        <div class="card-row">
-                            <span>Source:</span>
-                            <span id="val-source" class="val-text">Waiting...</span>
+                    <!-- Robot Parameters (PolyScope Style) -->
+                    <div class="ur-params-card">
+                        <!-- Section 1: Tool Position -->
+                        <div class="ur-sec">
+                            <div class="ur-sec-hdr">Tool Position</div>
+                            <div class="ur-tcp-body">
+                                <table class="ur-tcp-table">
+                                    <tr>
+                                        <td class="ur-tcp-lbl">X</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-x">0.00</span></div></td>
+                                        <td class="ur-tcp-unit">mm</td>
+                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RX</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-rx">0.000</span></div></td>
+                                        <td class="ur-tcp-unit">rad</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="ur-tcp-lbl">Y</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-y">0.00</span></div></td>
+                                        <td class="ur-tcp-unit">mm</td>
+                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RY</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-ry">0.000</span></div></td>
+                                        <td class="ur-tcp-unit">rad</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="ur-tcp-lbl">Z</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-z">0.00</span></div></td>
+                                        <td class="ur-tcp-unit">mm</td>
+                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RZ</td>
+                                        <td><div class="ur-tcp-val-box"><span id="val-tcp-rz">0.000</span></div></td>
+                                        <td class="ur-tcp-unit">rad</td>
+                                    </tr>
+                                </table>
+                            </div>
                         </div>
-                        <div class="card-row">
-                            <span>Move (Trigger):</span>
-                            <span id="val-trigger" class="badge gray">Released</span>
-                        </div>
-                        <div class="card-row">
-                            <span>Rotate (Grip):</span>
-                            <span id="val-grip" class="badge gray">Released</span>
-                        </div>
-                        <div class="card-row">
-                            <span>Mode (Btn B/Y):</span>
-                            <span id="val-mode" class="badge green">Drive Mode</span>
-                        </div>
-                        <div class="card-row">
-                            <span>Gripper (Btn A/X):</span>
-                            <span id="val-gripper-btn" class="badge gray">Open</span>
-                        </div>
-                        <div class="card-row">
-                            <span>Go Home:</span>
-                            <span id="val-home-btn" class="badge gray">Thumbstick / Hold B (&gt;3s)</span>
-                        </div>
-                    </div>
 
-                    <!-- Card 4: Kinematics (Pose) -->
-                    <div class="status-card">
-                        <div class="card-title" style="text-align: center;">ROBOT POSE</div>
-                        <div style="display: flex; gap: 15px;">
-                            <!-- Left: Position -->
-                            <div style="flex: 1;">
-                                <div
-                                    style="font-size: 14px; font-weight: bold; color: #64748b; margin-bottom: 8px; text-align: center;">
-                                    POSITION</div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;color:#4CAF50;">X:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-x" class="val-text">0.000</span></div>
+                        <!-- Section 2: Joint Position -->
+                        <div class="ur-sec" style="margin-top: 14px;">
+                            <div class="ur-sec-hdr">Joint Position</div>
+                            <div class="ur-joints-body">
+                                <!-- Base (q1) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Base</span>
+                                            <span id="val-base-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-base-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-base" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
                                 </div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;color:#f44336;">Y:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-y" class="val-text">0.000</span></div>
+
+                                <!-- Shoulder (q2) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Shoulder</span>
+                                            <span id="val-shoulder-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-shoulder-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-shoulder" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
                                 </div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;color:#2196F3;">Z:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-z" class="val-text">0.000</span></div>
+
+                                <!-- Elbow (q3) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Elbow</span>
+                                            <span id="val-elbow-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-elbow-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-elbow" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Wrist 1 (q4) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Wrist 1</span>
+                                            <span id="val-wrist1-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-wrist1-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-wrist1" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Wrist 2 (q5) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Wrist 2</span>
+                                            <span id="val-wrist2-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-wrist2-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-wrist2" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Wrist 3 (q6) -->
+                                <div class="ur-joint-item">
+                                    <div class="ur-joint-row">
+                                        <span class="ur-joint-arr">&#9664;</span>
+                                        <div class="ur-joint-label-group">
+                                            <span class="ur-joint-name">Wrist 3</span>
+                                            <span id="val-wrist3-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        </div>
+                                        <div class="ur-joint-val-box"><span id="val-wrist3-deg">0.00</span></div>
+                                        <span class="ur-joint-deg-unit">&deg;</span>
+                                        <span class="ur-joint-arr">&#9654;</span>
+                                    </div>
+                                    <div class="ur-track-wrap">
+                                        <div class="ur-track-tick-q1"></div>
+                                        <div class="ur-track-tick-mid"></div>
+                                        <div class="ur-track-tick-q3"></div>
+                                        <div id="ptr-wrist3" class="ur-track-pointer" style="left: 50%;"></div>
+                                    </div>
                                 </div>
                             </div>
+                        </div>
 
-                            <!-- Divider -->
-                            <div style="width: 2px; background: #e2e8f0; border-radius: 1px;"></div>
-
-                            <!-- Right: Orientation -->
-                            <div style="flex: 1;">
-                                <div
-                                    style="font-size: 14px; font-weight: bold; color: #64748b; margin-bottom: 8px; text-align: center;">
-                                    ORIENTATION</div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;">Qx:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-qx" class="val-text">0.000</span></div>
-                                </div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;">Qy:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-qy" class="val-text">0.000</span></div>
-                                </div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;">Qz:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-qz" class="val-text">0.000</span></div>
-                                </div>
-                                <div class="card-row">
-                                    <span class="axis-label" style="font-weight:bold;">Qw:</span>
-                                    <div class="fake-input"
-                                        style="border:none;padding:0;background:transparent;text-align:right;"><span
-                                            id="val-qw" class="val-text">1.000</span></div>
-                                </div>
+                        <!-- System / Gripper Status -->
+                        <div class="ur-status-footer">
+                            <div class="ur-status-row">
+                                <span style="font-size: 12px; font-weight: 600; color: #475569;">Gripper:</span>
+                                <span id="val-gripper-state" class="badge gray">Open</span>
                             </div>
                         </div>
                     </div>
