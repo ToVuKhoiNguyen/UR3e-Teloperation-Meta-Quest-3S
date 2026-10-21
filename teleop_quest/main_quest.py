@@ -361,7 +361,8 @@ def main():
     _last_btn_b_state = False
     _last_trig_state = False
     _last_grip_state = False
-    _last_thumbstick_click_state = False
+    _thumbstick_press_start_time = 0.0
+    _thumbstick_home_triggered = False
     _last_scale_log_time = 0.0
 
     # 8. Vòng lặp điều khiển chính (20Hz)
@@ -407,14 +408,31 @@ def main():
             _is_joy_tilt = True
 
         # B1. Xử lý sự kiện nhấn cần Joystick (Thumbstick Click) -> Về Home an toàn
-        thumbstick_click_triggered = _is_thumbstick_click and not _last_thumbstick_click_state
-        _last_thumbstick_click_state = _is_thumbstick_click
-        if thumbstick_click_triggered:
-            t_click = time.perf_counter()
-            quest_server.send_haptic(intensity=1.0, duration=300)
-            trigger_go_home(source_name="VR Thumbstick Click (Nút Joystick)")
-            latency_ms = (time.perf_counter() - t_click) * 1000.0
-            print(f"[VR Teleop] Sự kiện nhấn Joystick (Thumbstick Click) -> Về Home (Độ trễ phản hồi: {latency_ms:.2f}ms)")
+        # Ràng buộc an toàn:
+        # - Chống bấm nhầm: Yêu cầu nhấn giữ liên tục >= 0.5s
+        # - Khóa an toàn: Không kích hoạt khi đang bóp cò (_is_trig) hoặc đang giữ grip (_is_grip)
+        # - Chống chạy chồng: Không kích hoạt khi đang thực hiện Go Home (is_navigating_home.is_set())
+        if _is_thumbstick_click:
+            if _is_trig or _is_grip:
+                if _thumbstick_press_start_time > 0.0:
+                    print("[VR Teleop] Bỏ qua nhấn Joystick Go Home vì đang bóp cò/grip điều khiển.")
+                _thumbstick_press_start_time = 0.0
+                _thumbstick_home_triggered = False
+            elif is_navigating_home.is_set():
+                pass
+            else:
+                if _thumbstick_press_start_time == 0.0:
+                    _thumbstick_press_start_time = time.time()
+                elif (time.time() - _thumbstick_press_start_time >= 0.5) and not _thumbstick_home_triggered:
+                    _thumbstick_home_triggered = True
+                    t_click = time.perf_counter()
+                    quest_server.send_haptic(intensity=1.0, duration=300)
+                    trigger_go_home(source_name="VR Thumbstick Click (Giữ ≥ 0.5s)")
+                    latency_ms = (time.perf_counter() - t_click) * 1000.0
+                    print(f"[VR Teleop] Nhấn giữ Joystick đủ 0.5s -> Kích hoạt Go Home an toàn (Độ trễ khởi tạo: {latency_ms:.2f}ms)")
+        else:
+            _thumbstick_press_start_time = 0.0
+            _thumbstick_home_triggered = False
 
         # B2. Tinh chỉnh độ nhạy (Scale) bằng cần Analog dọc (Thumbstick Y) theo thời gian thực
         thumbstick_axes = vr_frame.get("thumbstick_axes", [0.0, 0.0]) if vr_frame else [0.0, 0.0]
