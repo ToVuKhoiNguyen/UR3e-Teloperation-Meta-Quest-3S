@@ -100,13 +100,6 @@ def register_ui_callbacks(
         latency_ms = (time.perf_counter() - t0) * 1000.0
         print(f"[Viser UI Event] Đã cập nhật trạng thái Gripper: {is_closed} (Độ trễ: {latency_ms:.2f}ms)")
 
-    if hasattr(ui, "ui_cam_mode"):
-        @ui.ui_cam_mode.on_update
-        def _on_cam_mode_update(_):
-            t0 = time.perf_counter()
-            mode_str = ui.get_camera_view_mode()
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            print(f"[Viser UI Event] Đổi chế độ xem Camera: {ui.ui_cam_mode.value} -> '{mode_str}' (Độ trễ: {latency_ms:.2f}ms)")
 
     if hasattr(ui, "ui_status") and hasattr(ui.ui_status, "on_update"):
         @ui.ui_status.on_update
@@ -552,13 +545,18 @@ def main():
         _last_vr_gripper_raw = raw_vr_gripper
 
         # Cập nhật màu sắc & phím bấm của mô hình tay cầm VR trên Viser
+        delta_trans = pose_source.get_delta_translation() if hasattr(pose_source, "get_delta_translation") else np.zeros(3)
+        vr_quat = vr_frame.get("quat", None) if vr_frame else None
+
         ui.update_controller_visual(
             is_translating=_is_trig,
             is_rotating=_is_grip,
             is_gripper_btn=raw_vr_gripper,
             is_btn_b=_is_btn_b,
             is_joystick=(_is_joy_tilt or _is_thumbstick_click or abs(stick_y) > 0.35),
-            is_home=_is_home
+            is_home=_is_home,
+            delta_trans=delta_trans,
+            vr_quat=vr_quat
         )
 
         if toggle_triggered:

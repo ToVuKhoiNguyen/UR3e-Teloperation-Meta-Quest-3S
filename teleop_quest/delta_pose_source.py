@@ -48,6 +48,8 @@ class DeltaPoseSource:
         self._anchor_u_fwd = np.copy(self._desk_u_fwd)
         self._anchor_u_right = np.copy(self._desk_u_right)
         self._last_dominant_trans_axis = None
+        self.last_delta_trans = np.zeros(3, dtype=float)
+        self.last_delta_mag = 0.0
 
         # Cấu hình chống nhiễu chuyên sâu (Anti-Noise & Jitter Suppression)
         self.rot_deadband = float(os.environ.get("ROT_DEADBAND", "0.045"))  # ~2.6 độ (triệt tiêu rung tay khi bóp giữ phím)
@@ -415,6 +417,9 @@ class DeltaPoseSource:
             d_lateral  *= self.sensitivity_scale
             d_vertical *= self.sensitivity_scale
 
+            self.last_delta_trans = np.array([d_forward, d_lateral, d_vertical], dtype=float)
+            self.last_delta_mag = float(delta_mag)
+
             cm_fwd = d_forward * 100.0
             cm_lat = d_lateral * 100.0
             cm_vert = d_vertical * 100.0
@@ -528,6 +533,8 @@ class DeltaPoseSource:
         else:
             delta_robot_world = np.zeros(3)
             diag_msg = "CHỈ XOAY (KHÓA TỊNH TIẾN)"
+            self.last_delta_trans = np.zeros(3, dtype=float)
+            self.last_delta_mag = 0.0
             target_pos = np.copy(self._anchor_tcp[:3])
             self._current_delta_theta = 0.0
             self._last_dominant_trans_axis = None
@@ -772,6 +779,10 @@ class DeltaPoseSource:
         except:
             return None
 
+    def get_delta_translation(self) -> np.ndarray:
+        """Trả về vector tịnh tiến [d_forward, d_lateral, d_vertical] (mét) theo thời gian thực"""
+        return getattr(self, "last_delta_trans", np.zeros(3, dtype=float))
+
     def reset_anchor(self):
         self._last_button_state = 0
         self._anchor_pos_quest = None
@@ -785,4 +796,6 @@ class DeltaPoseSource:
         self._ema_pos = None
         self._ema_quat_xyzw = None
         self._last_dominant_rot_axis = None
+        self.last_delta_trans = np.zeros(3, dtype=float)
+        self.last_delta_mag = 0.0
         self.out_of_reach_time = 0.0
