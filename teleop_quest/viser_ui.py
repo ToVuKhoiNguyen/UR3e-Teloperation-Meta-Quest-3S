@@ -393,8 +393,25 @@ class TeleopViserUI:
 
         # Thư mục Camera cổ tay thu gọn (collapsible, có thể gập mở tùy ý)
         with self.server.gui.add_folder("Wrist Camera", expand_by_default=True):
-            init_img = np.full((150, 200, 3), 200, dtype=np.uint8)
+            self.ui_cam_mode = self.server.gui.add_dropdown(
+                "Chế độ hiển thị",
+                options=["RGB Màu", "Độ sâu (Depth)", "Ghép đôi (RGB + Depth)"],
+                initial_value="RGB Màu"
+            )
+            # Khởi tạo khung hình xem trước độ nét cao (tỉ lệ chuẩn 4:3)
+            init_img = np.full((240, 320, 3), 35, dtype=np.uint8)
             self.ui_cam_preview = self.server.gui.add_image(init_img)
+
+    def get_camera_view_mode(self) -> str:
+        """Lấy chế độ xem camera hiện tại từ dropdown: 'rgb', 'depth', hoặc 'side_by_side'"""
+        if not hasattr(self, "ui_cam_mode"):
+            return "rgb"
+        val = str(self.ui_cam_mode.value)
+        if "depth" in val.lower() or "độ sâu" in val.lower():
+            return "depth"
+        elif "ghép" in val.lower() or "side" in val.lower():
+            return "side_by_side"
+        return "rgb"
 
     def _on_status_change(self):
         self._val_status = self.ui_status.value
@@ -428,8 +445,20 @@ class TeleopViserUI:
             self.viser_urdf.update_cfg(np.array(q, dtype=float))
 
     def update_cam_preview(self, frame_rgb: np.ndarray):
-        """Cập nhật ảnh xem trực tiếp camera cổ tay lên sidebar Viser"""
-        thumb = cv2.resize(frame_rgb, (200, 150))
+        """Cập nhật ảnh xem trực tiếp camera cổ tay lên sidebar Viser sắc nét và đúng tỉ lệ khung hình"""
+        if frame_rgb is None:
+            return
+        h, w = frame_rgb.shape[:2]
+        aspect = float(w) / float(max(1, h))
+        if aspect > 2.0:
+            # Khung hình ghép đôi ngang (side-by-side)
+            target_w = 380
+            target_h = int(target_w / aspect)
+        else:
+            # Khung hình đơn (RGB hoặc Depth): 320x240 sắc nét
+            target_w = 320
+            target_h = int(target_w / aspect)
+        thumb = cv2.resize(frame_rgb, (target_w, target_h), interpolation=cv2.INTER_AREA)
         self.ui_cam_preview.image = thumb
 
     def set_status(self, text: str):

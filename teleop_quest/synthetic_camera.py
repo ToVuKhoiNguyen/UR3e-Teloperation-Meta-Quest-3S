@@ -45,7 +45,7 @@ class SyntheticWristCamera:
             tomato_pos = tool_quat
             tool_quat = None
 
-        pos_cam = np.array(tool_pos[:3], dtype=np.float32)
+        pos_cam = np.array(tool_pos[:3], dtype=np.float32) if tool_pos is not None else np.array([0.0, 0.3, 0.35], dtype=np.float32)
 
         if tool_quat is not None and len(tool_quat) == 4:
             # PyRoki FK Quaternion: [w, x, y, z]
@@ -54,7 +54,7 @@ class SyntheticWristCamera:
             rot_axis = np.array(tool_quat, dtype=np.float32)
             angle = np.linalg.norm(rot_axis)
             R_world_tool = transforms3d.axangles.axangle2mat(rot_axis / angle, angle) if angle > 1e-6 else np.eye(3)
-        elif len(tool_pos) >= 6:
+        elif tool_pos is not None and len(tool_pos) >= 6:
             rot_axis = np.array(tool_pos[3:], dtype=np.float32)
             angle = np.linalg.norm(rot_axis)
             R_world_tool = transforms3d.axangles.axangle2mat(rot_axis / angle, angle) if angle > 1e-6 else np.eye(3)
@@ -72,10 +72,12 @@ class SyntheticWristCamera:
 
         def project_point(p_world):
             """Chiếu điểm 3D world sang pixel 2D (u, v, z_cam)"""
+            if p_world is None:
+                return None, None, 1.0
             p_rel = np.array(p_world, dtype=np.float32) - pos_cam
             p_cam = R_cam_world @ p_rel
             z = float(p_cam[2])
-            if z <= 0.02:  # Phía sau camera hoặc quá sát thấu kính
+            if z <= 0.02 or math.isnan(z):  # Phía sau camera hoặc quá sát thấu kính
                 return None, None, z
             u = int(self.fx * (p_cam[0] / z) + self.cx)
             v = int(self.fy * (p_cam[1] / z) + self.cy)
@@ -135,6 +137,110 @@ class SyntheticWristCamera:
                       (int(self.cx + offset_x + finger_w), self.height), (70, 75, 80), -1)
 
         return img
+
+    def render_depth(
+        self,
+        tool_pos: Optional[Union[list, np.ndarray]] = None,
+        tool_quat: Optional[Union[list, np.ndarray]] = None,
+        tomato_pos: Optional[np.ndarray] = None,
+        basket_pos: Optional[np.ndarray] = None,
+        gripper_closed: bool = False,
+        tcp_pose: Optional[Union[list, np.ndarray]] = None,
+        **kwargs
+    ):
+        """
+        Render bản đồ độ sâu mô phỏng (Synthetic Depth Stream):
+        - Trả về tuple: (depth_colored_rgb, depth_raw_uint16_mm)
+        - depth_colored_rgb: shape (H, W, 3) hệ màu RGB qua RealSense Turbo Colorizer
+        - depth_raw_uint16_mm: shape (H, W) đơn vị mm (chuẩn format z16)
+        """
+        if tool_pos is None and tcp_pose is not None:
+            tool_pos = tcp_pose
+
+        if tool_quat is not None and not isinstance(tool_quat, (list, tuple, np.ndarray)):
+            gripper_closed = bool(basket_pos) if basket_pos is not None else False
+            basket_pos = tomato_pos
+            tomato_pos = tool_quat
+            tool_quat = None
+
+        pos_cam = np.array(tool_pos[:3], dtype=np.float32) if tool_pos is not None else np.array([0.0, 0.3, 0.35], dtype=np.float32)
+
+        if tool_quat is not None and len(tool_quat) == 4:
+            R_world_tool = transforms3d.quaternions.quat2mat(tool_quat)
+        elif tool_quat is not None and len(tool_quat) == 3:
+            rot_axis = np.array(tool_quat, dtype=np.float32)
+            angle = np.linalg.norm(rot_axis)
+            R_world_tool = transforms3d.axangles.axangle2mat(rot_axis / angle, angle) if angle > 1e-6 else np.eye(3)
+        elif tool_pos is not None and len(tool_pos) >= 6:
+            rot_axis = np.array(tool_pos[3:], dtype=np.float32)
+            angle = np.linalg.norm(rot_axis)
+            R_world_tool = transforms3d.axangles.axangle2mat(rot_axis / angle, angle) if angle > 1e-6 else np.eye(3)
+        else:
+            R_world_tool = np.eye(3)
+
+        R_cam_world = R_world_tool.T
+
+        def project_point(p_world):
+            if p_world is None:
+                return None, None, 1.0
+            p_rel = np.array(p_world, dtype=np.float32) - pos_cam
+            p_cam = R_cam_world @ p_rel
+            z = float(p_cam[2])
+            if z <= 0.02:
+                return None, None, z
+            u = int(self.fx * (p_cam[0] / z) + self.cx)
+            v = int(self.fy * (p_cam[1] / z) + self.cy)
+            return u, v, z
+
+        # 1. Nền và mặt bàn (Độ sâu mô phỏng từ camera xuống mặt bàn z=0)
+        z_table_est = max(0.12, float(pos_cam[2]))
+        z_table_mm = int(z_table_est * 1000)
+
+        # Gradient theo chiều cao ảnh (mép dưới gần camera hơn mép trên)
+        depth_raw = np.zeros((self.height, self.width), dtype=np.uint16)
+        y_indices = np.arange(self.height, dtype=np.float32)
+        table_rows = np.clip(z_table_mm + (self.height - y_indices - self.height * 0.35) * 0.45, 120, 1500).astype(np.uint16)
+        depth_raw[:, :] = table_rows[:, None]
+
+        # 2. Khay giỏ
+        u_b, v_b, z_b = project_point(basket_pos)
+        if u_b is not None and 0 <= u_b < self.width and 0 <= v_b < self.height:
+            w_box = max(20, int(self.fx * 0.15 / z_b))
+            h_box = max(15, int(self.fy * 0.15 / z_b))
+            z_box_mm = np.uint16(max(100, int(z_b * 1000 - 30)))
+            cv2.rectangle(
+                depth_raw,
+                (max(0, u_b - w_box // 2), max(0, v_b - h_box // 2)),
+                (min(self.width - 1, u_b + w_box // 2), min(self.height - 1, v_b + h_box // 2)),
+                int(z_box_mm),
+                -1
+            )
+
+        # 3. Quả cà chua
+        u_t, v_t, z_t = project_point(tomato_pos)
+        if u_t is not None and -50 <= u_t < self.width + 50 and -50 <= v_t < self.height + 50:
+            rad = max(8, int(self.fx * 0.032 / z_t))
+            z_tom_mm = np.uint16(max(80, int(z_t * 1000 - 35)))
+            cv2.circle(depth_raw, (u_t, v_t), rad, int(z_tom_mm), -1)
+
+        # 4. Ngón tay kẹp (Gripper) - sát thấu kính nhất (~85mm)
+        finger_w = 45
+        finger_h = 120
+        offset_x = 100 if gripper_closed else 150
+        z_grip_mm = np.uint16(85)
+        cv2.rectangle(depth_raw, (int(self.cx - offset_x - finger_w), self.height - finger_h),
+                      (int(self.cx - offset_x), self.height), int(z_grip_mm), -1)
+        cv2.rectangle(depth_raw, (int(self.cx + offset_x), self.height - finger_h),
+                      (int(self.cx + offset_x + finger_w), self.height), int(z_grip_mm), -1)
+
+        # 5. Colorizer: Chuyển depth mm thành RGB colormap (TURBO)
+        d_min, d_max = 80.0, 750.0
+        depth_clipped = np.clip(depth_raw.astype(np.float32), d_min, d_max)
+        depth_norm = ((depth_clipped - d_min) / (d_max - d_min) * 255.0).astype(np.uint8)
+        depth_colored_bgr = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+        depth_colored_rgb = cv2.cvtColor(depth_colored_bgr, cv2.COLOR_BGR2RGB)
+
+        return depth_colored_rgb, depth_raw
 
     def add_osd_preview(self, img_rgb: np.ndarray, gripper_closed: bool = False) -> np.ndarray:
         """

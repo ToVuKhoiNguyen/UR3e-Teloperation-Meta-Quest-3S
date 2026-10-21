@@ -200,8 +200,13 @@ class QuestServer:
         try:
             import cv2
             import base64
-            # Resize ảnh cho luồng stream VR 320x240 để siêu nhẹ (chỉ ~8KB/frame)
-            small = cv2.resize(frame_rgb, (320, 240))
+            # Tự động điều chỉnh kích thước theo tỉ lệ khung hình (giữ đúng tỉ lệ khi xem side-by-side)
+            h_f, w_f = frame_rgb.shape[:2]
+            aspect = float(w_f) / float(max(1, h_f))
+            if aspect > 2.0:
+                small = cv2.resize(frame_rgb, (480, int(480 / aspect)))
+            else:
+                small = cv2.resize(frame_rgb, (320, 240))
             bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
             success, encimg = cv2.imencode('.jpg', bgr, encode_param)
