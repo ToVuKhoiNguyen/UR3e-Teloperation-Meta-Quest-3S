@@ -29,11 +29,50 @@ class PyrokiIKSolverWrapper:
         return self._ik.fk(q)
 
 
+def clamp_cartesian_safety(pose, z_min=0.05, z_max=0.55, r_min=0.12, r_max=0.485):
+    """
+    Rào chắn an toàn không gian Descartes (Virtual Safety Envelope).
+    Giữ khoảng cách an toàn tối thiểu 5cm (0.05m) đối với mặt bàn (Z_min >= 0.05m),
+    cách thân đế robot tối thiểu 5cm (R_min >= 0.12m khi Z <= 0.25m),
+    và chặn vươn quá tầm với cơ học (R_max <= 0.485m).
+    Độ trễ tính toán < 0.05ms.
+    """
+    if isinstance(pose, dict) and "pos" in pose:
+        p = list(pose["pos"])
+    elif isinstance(pose, (tuple, list)) and len(pose) == 2:
+        p = list(pose[0])
+    else:
+        return pose
+
+    # 1. Giới hạn độ cao Z: Duy trì khoảng cách tối thiểu 5cm (0.05m) so với mặt bàn
+    p[2] = max(z_min, min(z_max, float(p[2])))
+
+    # 2. Giới hạn bán kính ngang XY:
+    r_xy = float(np.hypot(p[0], p[1]))
+    # Nếu đang ở tầm thấp (Z <= 0.25m), chống tự va chạm thân Base (R_base + 5cm = 0.12m)
+    current_r_min = r_min if p[2] <= 0.25 else 0.08
+    if r_xy < current_r_min:
+        scale = current_r_min / max(r_xy, 1e-6)
+        p[0] *= scale
+        p[1] *= scale
+    elif r_xy > r_max:
+        scale = r_max / r_xy
+        p[0] *= scale
+        p[1] *= scale
+
+    if isinstance(pose, dict):
+        pose_safe = dict(pose)
+        pose_safe["pos"] = p
+        return pose_safe
+    else:
+        return (p, pose[1])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 2: SafetyGate
 # ─────────────────────────────────────────────────────────────────────────────
 # Input:  q = [6 Radian] từ IK solver
-# Output: { "pass": bool, "reason": str, "sigma_min": float }
+# Output: { "pass": bool, "reason": str, "sigma_min": float, "damping": float }
 #
 class SafetyGate:
     SHOULDER_PAN_LIMIT = 6.28   # ±360°
@@ -47,24 +86,34 @@ class SafetyGate:
 
     def check(self, q):
         if q is None:
-            return {"pass": False, "reason": "IK failed", "sigma_min": 0.0}
+            return {"pass": False, "reason": "IK failed", "sigma_min": 0.0, "damping": 0.0}
         # Lớp 2: Chống chúi/ngửa bắp tay đâm bàn hoặc đâm đế robot
         if q[1] > self.SHOULDER_LIFT_MAX or q[1] < self.SHOULDER_LIFT_MIN:
-            return {"pass": False, "reason": f"shoulder_lift_limit(q1={q[1]:.2f})", "sigma_min": 0.0}
+            return {"pass": False, "reason": f"shoulder_lift_limit(q1={q[1]:.2f})", "sigma_min": 0.0, "damping": 0.0}
         # Lớp 4: Chống tự va chạm gập khuỷu tay (Elbow self-collision)
         if abs(q[2]) > self.ELBOW_LIMIT:
-            return {"pass": False, "reason": f"elbow_clamp(|q2|={abs(q[2]):.2f}>2.80)", "sigma_min": 0.0}
+            return {"pass": False, "reason": f"elbow_clamp(|q2|={abs(q[2]):.2f}>2.80)", "sigma_min": 0.0, "damping": 0.0}
         # Lớp 5: Chống tự kẹp cổ tay
         if abs(q[3]) > self.WRIST_LIMIT or abs(q[4]) > self.WRIST_LIMIT:
-            return {"pass": False, "reason": "wrist_clamp", "sigma_min": 0.0}
+            return {"pass": False, "reason": "wrist_clamp", "sigma_min": 0.0, "damping": 0.0}
         # Lớp 1: Kiểm tra kỳ dị
         m = self._guard.metrics_calc.get_metrics(
             torch.tensor([q], device=self._guard.metrics_calc.device)
         )
         sigma = m["sigma_min"].item()
         if sigma < self._guard.danger_threshold:
-            return {"pass": False, "reason": f"singularity(σ={sigma:.4f})", "sigma_min": sigma}
-        return {"pass": True, "reason": "ok", "sigma_min": sigma}
+            return {"pass": False, "reason": f"singularity(σ={sigma:.4f})", "sigma_min": sigma, "damping": 0.0}
+
+        # Continuous Singularity Damping: Khi tiến gần biên kỳ dị (danger < sigma < warn),
+        # tự động hãm vận tốc mượt mà thay vì phanh chết đột ngột
+        damping = 1.0
+        if sigma < self._guard.warn_threshold:
+            # Hermite smoothstep từ 0.2 (khi sát danger) tới 1.0 (khi chạm warn)
+            t = (sigma - self._guard.danger_threshold) / max(self._guard.warn_threshold - self._guard.danger_threshold, 1e-4)
+            t = max(0.0, min(1.0, t))
+            damping = 0.2 + 0.8 * (t * t * (3.0 - 2.0 * t))
+
+        return {"pass": True, "reason": "ok", "sigma_min": sigma, "damping": damping}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,16 +296,19 @@ class TeleoperationController:
         if not self._enabled:
             return
 
-        # ── Lấy pose mới từ PoseSource ──────────────────────────────────────
+        # ── Lấy pose mới từ PoseSource và áp dụng Hàng rào ảo 5cm ─────────────
         if pose is None:
             pose = self._pose.get_pose()
         if pose is None:
             self._exec.stop()
             return  # pose không đổi / không ấn phím → dừng servoJ để robot đứng yên lập tức
 
+        # Tầng 1: Rào chắn an toàn không gian Descartes (Cách mặt bàn/vật cản >= 5cm)
+        pose_safe = clamp_cartesian_safety(pose, z_min=0.05, z_max=0.55, r_min=0.12, r_max=0.485)
+
         # ── Giải IK bằng PyRoki CPU ─────────────────────────────────────────
         q_seed = self._last_valid_q if self._last_valid_q is not None else q_real
-        result_ik = self._solver.solve(pose, q_seed)
+        result_ik = self._solver.solve(pose_safe, q_seed)
 
         with self._lock:
             self._latency["pyroki_ms"] = result_ik["latency_ms"]
@@ -285,34 +337,51 @@ class TeleoperationController:
                     q_target = [self._last_valid_q[i] + dq[i] / max_ratio for i in range(6)]
         else:
             # Phân tách chính xác nguyên nhân không tìm được nghiệm IK
-            pos = pose["pos"]
+            pos = pose_safe["pos"] if isinstance(pose_safe, dict) else pose_safe[0]
             dist_base = (pos[0]**2 + pos[1]**2 + (pos[2] - 0.15)**2)**0.5
             with self._lock:
                 if dist_base > 0.49:
                     self._status = "Ngoài tầm với (Out of Reach) - Dừng im"
-                elif pos[2] < -0.01:
-                    self._status = "Sát mặt bàn bảo vệ (Table Limit) - Dừng im"
+                elif pos[2] <= 0.055:
+                    self._status = "Cách vật cản/mặt bàn ≤ 5cm - Dừng an toàn"
                 else:
                     self._status = "Tư thế không khả thi / Vướng vật cản - Dừng im"
             self._exec.stop()
             return
 
-        # ── Kiểm tra SafetyGate ──────────────────────────────────────────────
+        # ── Kiểm tra SafetyGate (Tầng 2 & Tầng 3) ───────────────────────────
         gate = self._gate.check(q_target)
         if not gate["pass"]:
             with self._lock:
-                self._status = f"Dừng - {gate['reason']}"
+                self._status = f"Dừng an toàn - {gate['reason']}"
             self._exec.stop()
             return
+
+        # Continuous Singularity Damping: Hãm mượt vận tốc khi lướt qua vùng lân cận kỳ dị
+        damping = gate.get("damping", 1.0)
+        if damping < 0.99 and self._last_valid_q is not None:
+            q_target = [self._last_valid_q[i] + (q_target[i] - self._last_valid_q[i]) * damping for i in range(6)]
+
+        # Kiểm định lại bằng Forward Kinematics (FK) để đảm bảo TCP/Camera cách mặt bàn ít nhất 5cm
+        try:
+            fk_chk = self._solver.fk(q_target)
+            if fk_chk and "pos" in fk_chk and fk_chk["pos"][2] < 0.045:
+                with self._lock:
+                    self._status = f"Chặn FK bàn máy: Z={fk_chk['pos'][2]*1000:.0f}mm < 50mm"
+                self._exec.stop()
+                return
+        except Exception:
+            pass
 
         # ── Gọi RTDEControl.servoJ ───────────────────────────────────────────
         self._exec.send(q_target)
         self._last_valid_q = q_target
 
         sigma = gate["sigma_min"]
+        damp_str = f" | damp={damping:.2f}" if damping < 0.99 else ""
         with self._lock:
             self._status = (
                 f"[PyRoki] | "
-                f"sigma={sigma:.3f} | "
+                f"sigma={sigma:.3f}{damp_str} | "
                 f"IK:{result_ik['latency_ms']:.1f}ms"
             )

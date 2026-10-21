@@ -62,6 +62,7 @@ def register_ui_callbacks(
     is_navigating_home: threading.Event,
     pose_source: DeltaPoseSource = None,
     trigger_go_home = None,
+    gizmo_interaction: list = None,
 ):
     """Đăng ký sự kiện các nút bấm trên giao diện Viser UI"""
     placed_at_start = [0]
@@ -130,11 +131,13 @@ def register_ui_callbacks(
         @ui._raw_gizmo.on_update
         def _on_gizmo_update(_):
             t0 = time.perf_counter()
-            _ = ui._raw_gizmo.position
+            if gizmo_interaction is not None:
+                gizmo_interaction[0] = time.time()
+            pos = ui._raw_gizmo.position
             latency_ms = (time.perf_counter() - t0) * 1000.0
-            if not hasattr(_on_gizmo_update, "_last_log") or (time.time() - _on_gizmo_update._last_log > 2.0):
+            if not hasattr(_on_gizmo_update, "_last_log") or (time.time() - _on_gizmo_update._last_log > 1.0):
                 _on_gizmo_update._last_log = time.time()
-                print(f"[Viser UI Event] Tương tác 3D Transform Gizmo (Độ trễ: {latency_ms:.2f}ms)")
+                print(f"[Viser UI Event] Gizmo moved -> Tọa độ: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}] (Độ trễ: {latency_ms:.2f}ms)")
 
     @ui.cb_record.on_update
     def _on_record_update(_):
@@ -336,10 +339,12 @@ def main():
         print(f"[HomePlanner] Kích hoạt Go Home từ {source_name} (Độ trễ khởi tạo: {latency_ms:.2f}ms)")
         return True
 
+    gizmo_interaction = [0.0]
     register_ui_callbacks(
         ui, grasp_sim, logger, teleop, executor, ctrl,
         widget_pose_source, home_planner, quest_server, is_navigating_home,
-        pose_source=pose_source, trigger_go_home=trigger_go_home
+        pose_source=pose_source, trigger_go_home=trigger_go_home,
+        gizmo_interaction=gizmo_interaction
     )
 
     # Xử lý tắt an toàn
@@ -459,6 +464,8 @@ def main():
             else:
                 new_teleop_state = not ui.cb_teleop.value
                 ui.cb_teleop.value = new_teleop_state
+                quest_server.set_drive_mode(new_teleop_state)
+                _last_quest_drive_mode = new_teleop_state
                 state_str = "BẬT" if new_teleop_state else "TẮT"
                 print(f"[VR Teleop] Nút B ấn -> Chuyển trạng thái Teleop: {state_str}")
                 quest_server.send_haptic(intensity=0.7, duration=150)
@@ -569,14 +576,27 @@ def main():
 
         if teleop.enabled and fk_res is not None:
             try:
-                # Cập nhật tọa độ VR vào Widget 3D
+                target_pose = None
+                source_type = None
+
+                # 1. Ưu tiên 1: Kính VR Quest (khi bóp Cò tịnh tiến hoặc bóp Grip xoay)
                 vr_pose = pose_source.get_pose()
                 if vr_pose is not None:
+                    target_pose = vr_pose
+                    source_type = "VR Controller"
+                    # Đồng bộ vị trí VR vào Gizmo để Viser UI hiển thị trùng khớp
                     ui.target_widget.position = vr_pose["pos"]
                     ui.target_widget.wxyz = vr_pose["quat"]
+                    widget_pose_source.sync_with_robot()
 
-                    # Giải IK và gửi lệnh điều khiển tới robot
-                    teleop.step(q_real, pose=vr_pose)
+                # 2. Ưu tiên 2: Chuột kéo Transform Gizmo trên Viser Dashboard (khi không dùng VR)
+                elif (time.time() - gizmo_interaction[0]) < 0.35:
+                    target_pose = widget_pose_source.get_pose()
+                    source_type = "Viser Gizmo"
+
+                if target_pose is not None:
+                    # Giải IK PyRoki và điều khiển robot
+                    teleop.step(q_real, pose=target_pose)
                     current_status = teleop.get_status()
                     status_low = current_status.lower()
 
@@ -584,8 +604,8 @@ def main():
                         ui.set_status("IK Error")
                     elif "ngoai tam voi" in status_low or "ngoài tầm với" in status_low or "out of reach" in status_low:
                         ui.set_status("Ngoài tầm với (Out of Reach)")
-                    elif "mặt bàn" in status_low or "mat ban" in status_low or "table limit" in status_low:
-                        ui.set_status("Sát mặt bàn bảo vệ")
+                    elif "mặt bàn" in status_low or "mat ban" in status_low or "table limit" in status_low or "5cm" in status_low:
+                        ui.set_status("Cách vật cản/bàn ≤ 5cm")
                     elif "van xoan" in status_low or "vặn xoắn" in status_low or "tu the ket" in status_low or "tư thế kẹt" in status_low:
                         ui.set_status("Tư thế kẹt (Vặn xoắn)")
                     elif "vat can" in status_low or "vật cản" in status_low:
@@ -599,10 +619,10 @@ def main():
 
                     # Tự động hồi phục XYZ nếu kẹt tư thế hoặc vướng vật cản kéo dài
                     is_twisting = any(err in status_low for err in ["van xoan", "vặn xoắn", "tu the ket", "tư thế kẹt", "twist"])
-                    is_obstacle = any(err in status_low for err in ["vat can", "vật cản", "dung vat can", "đụng vật cản", "obstacle"])
+                    is_obstacle = any(err in status_low for err in ["vat can", "vật cản", "dung vat can", "đụng vật cản", "obstacle", "5cm"])
                     is_stuck = is_twisting or is_obstacle or any(err in status_low for err in [
                         "ngoai tam voi", "ngoài tầm với", "out of reach",
-                        "singularity", "wrist_clamp", "that bai", "thất bại", "fail", "ik error"
+                        "singularity", "wrist_clamp", "that bai", "thất bại", "fail", "ik error", "5cm"
                     ])
 
                     snap_threshold = 1.2 if (is_twisting or is_obstacle) else 1.8
@@ -632,7 +652,7 @@ def main():
                             main._last_snap_log_time = time.time()
                             print(f"[Auto-Snap] Dừng: {current_status}")
                 else:
-                    # Cò súng không ấn (và không giữ grip) -> Dừng robot ngay lập tức
+                    # Cả VR và Gizmo đều không điều khiển -> Dừng robot an toàn
                     executor.stop(10.0)
                     pose_source.out_of_reach_time = 0.0
                     if not _is_trig and not _is_grip:

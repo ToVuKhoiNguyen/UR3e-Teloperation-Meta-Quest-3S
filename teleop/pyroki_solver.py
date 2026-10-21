@@ -218,7 +218,7 @@ class PyrokiIKSolver:
                 tcp_idx=tcp_idx,
                 cam_idx=cam_idx,
                 table_bounds=table_bounds,
-                safety_margin=0.04,
+                safety_margin=0.05,
                 cam_radius=0.035,
                 weight_floor=200.0,
                 weight_table=250.0,

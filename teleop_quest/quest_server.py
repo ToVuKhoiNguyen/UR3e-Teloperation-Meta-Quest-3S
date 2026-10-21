@@ -406,9 +406,23 @@ class QuestServer:
             def log_message(self, format, *args):
                 pass  # Tắt log mặc định để tránh spam terminal
 
+        class ThreadedSSLServer(http.server.ThreadingHTTPServer):
+            request_queue_size = 64
+            def get_request(self):
+                sock, addr = self.socket.accept()
+                sock.settimeout(5.0)
+                try:
+                    ssl_sock = context.wrap_socket(sock, server_side=True)
+                    return ssl_sock, addr
+                except Exception:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    raise
+
         try:
-            httpd = http.server.ThreadingHTTPServer((self.host, self.http_port), RequestHandler)
-            httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+            httpd = ThreadedSSLServer((self.host, self.http_port), RequestHandler)
             print(f"[Quest] HTTPS Server running at https://{self.host}:{self.http_port}")
             httpd.serve_forever()
         except OSError as e:
@@ -450,6 +464,8 @@ class QuestServer:
                                 self._latest_frame = data
                                 self._last_seen = time.time()
                                 self._connected = True
+                                if "drive_mode" in data:
+                                    self._drive_mode = bool(data["drive_mode"])
                                 if data.get("gripper_toggle_btn"):
                                     self._gripper_toggle_requested = True
                                 # Đồng bộ tức thời trạng thái tay cầm vào telemetry cache để HTTP polling cập nhật nhạy

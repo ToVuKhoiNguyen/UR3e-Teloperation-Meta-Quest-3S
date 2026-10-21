@@ -263,10 +263,6 @@ class DeltaPoseSource:
         self._last_calib_combo = calib_combo
         self._last_btn_b = btn_b
 
-        # Không sinh delta pose khi đang ở Edit Mode để tránh di chuyển ngoài ý muốn
-        if hasattr(self.server, "get_drive_mode") and not self.server.get_drive_mode():
-            self._last_button_state = 0
-            return None
 
         # Tách biệt điều khiển Tịnh tiến (Trigger) và Xoay (Grip)
         is_translating = frame.get("trigger", False)
@@ -486,17 +482,17 @@ class DeltaPoseSource:
                 # 3. Lên / Xuống -> Nâng hạ chiều cao Z:
                 delta_z = d_vertical
                 delta_z = np.clip(delta_z, -self.max_delta_m, self.max_delta_m)
-                z_target = np.clip(p_anc[2] + delta_z, 0.00, 0.58)
+                z_target = np.clip(p_anc[2] + delta_z, 0.05, 0.55)
 
                 # Tọa độ đích kết hợp:
                 target_pos = p_rot + delta_reach * u_reach
                 target_pos[2] = z_target
 
                 # Giới hạn an toàn bán kính cơ học:
-                # Dải [0.10m, 0.485m] loại bỏ kẹt lùi, bảo vệ tầm với 500mm của UR3e
+                # Dải [0.12m, 0.485m] loại bỏ kẹt lùi, cách thân đế ít nhất 5cm, bảo vệ tầm với 500mm của UR3e
                 r_target_xy = np.hypot(target_pos[0], target_pos[1])
-                if r_target_xy < 0.10:
-                    scale_r = 0.10 / max(r_target_xy, 1e-6)
+                if r_target_xy < 0.12:
+                    scale_r = 0.12 / max(r_target_xy, 1e-6)
                     target_pos[0] *= scale_r
                     target_pos[1] *= scale_r
                 elif r_target_xy > 0.485:
@@ -536,10 +532,10 @@ class DeltaPoseSource:
             self._current_delta_theta = 0.0
             self._last_dominant_trans_axis = None
 
-        # Workspace safety clamp (Chuẩn tầm với UR3e 500mm, Z an toàn tuyệt đối trên mặt bàn)
-        target_pos[0] = np.clip(target_pos[0], -0.49, 0.49) # X
-        target_pos[1] = np.clip(target_pos[1], -0.49, 0.49) # Y
-        target_pos[2] = np.clip(target_pos[2], 0.00, 0.58)  # Z (an toàn tuyệt đối không đâm bàn)
+        # Workspace safety clamp (Cách mặt bàn ít nhất 5cm, cách thân đế 5cm, bảo vệ tầm với UR3e)
+        target_pos[0] = np.clip(target_pos[0], -0.45, 0.45) # X
+        target_pos[1] = np.clip(target_pos[1], -0.45, 0.45) # Y
+        target_pos[2] = np.clip(target_pos[2], 0.05, 0.55)  # Z (cách mặt bàn ít nhất 5cm an toàn)
 
         # Slew Rate Limiter: Tăng trần max_step lên 0.055 (5.5cm / 50ms = 1.1 m/s) giúp phản hồi vươn tay nhanh
         if self._ema_pos is not None:
