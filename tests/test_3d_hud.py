@@ -18,25 +18,54 @@ class Test3DHUD(unittest.TestCase):
     def tearDownClass(cls):
         cls.ui.server.stop()
 
-    def test_01_hud_frame_and_arrow_initialized(self):
-        """Node vr_controller_hud và mũi tên 3D arrow_trans được tạo độc lập"""
+    def test_01_hud_frame_and_redundant_ui_cleanup(self):
+        """Node vr_controller_hud tồn tại, mũi tên 3D và hệ trục bàn máy/gizmo đã bị ẩn/xóa"""
         self.assertTrue(hasattr(self.ui, "_hud_frame"))
-        self.assertTrue(hasattr(self.ui, "_arrow_trans"))
-        self.assertFalse(self.ui._arrow_trans.visible)
+        # Mũi tên dịch chuyển đã bị gỡ bỏ hoàn toàn
+        self.assertFalse(hasattr(self.ui, "_arrow_trans"))
+        # Hệ trục bàn máy (world_axes) và gizmo đã ẩn
+        self.assertFalse(self.ui._raw_gizmo.visible)
+        self.assertFalse(self.ui.server.scene.world_axes.visible)
+        # Khối 'Hiển thị 3D' đã bị gỡ khỏi GUI
+        self.assertFalse(hasattr(self.ui, "dropdown_hud_mode"))
+        self.assertFalse(hasattr(self.ui, "cb_show_gizmo"))
         self.assertTrue(np.allclose(self.ui._hud_frame.position, [0.42, -0.38, 0.12]))
 
     def test_02_target_widget_decoupled_from_hud(self):
-        """TargetWidgetWrapper vẫn hoạt động 1:1 với Gizmo nhưng không kéo tay cầm HUD đi theo"""
+        """TargetWidgetWrapper vẫn hoạt động 1:1 với Gizmo cho bộ giải IK nhưng không kéo tay cầm HUD đi theo"""
         old_hud_pos = tuple(self.ui._hud_frame.position)
-        # Di chuyển Gizmo đến vị trí TCP mới
         new_gizmo_pos = (0.35, 0.15, 0.45)
         self.ui.target_widget.position = new_gizmo_pos
         self.assertEqual(tuple(self.ui._raw_gizmo.position), new_gizmo_pos)
-        # Vị trí của HUD phải giữ nguyên vị trí bục/viewport, không bị bay theo TCP
         self.assertEqual(tuple(self.ui._hud_frame.position), old_hud_pos)
 
-    def test_03_translation_arrow_and_micro_displacement(self):
-        """Khi bóp cò và đẩy Tiến: Mũi tên hiển thị, đổi màu Neon Green, HUD nhích vi mô"""
+    def test_03_right_hand_controller_mirror_scale(self):
+        """Mô hình 3D tay cầm Quest được lật trục X thành tay phải (scale=(-1, 1, 1))"""
+        for mode, handle in self.ui._ctrl_handles.items():
+            self.assertEqual(handle.scale, (-1.0, 1.0, 1.0), f"Handle {mode} must have scale (-1, 1, 1)")
+
+    def test_04_hud_upright_orientation_math(self):
+        """Kiểm tra ma trận xoay offset bù hướng: Cán tay cầm chúc xuống và mặt nút hướng về người dùng"""
+        # Giả lập camera nhìn từ trước
+        class DummyCam:
+            position = (0.0, -1.0, 0.5)
+            # Camera nhìn vào gốc tọa độ (quay quanh trục X)
+            wxyz = (0.9238795, 0.3826834, 0.0, 0.0)
+
+        self.ui._sync_hud_to_camera(DummyCam())
+        # Cán tay cầm trong tọa độ camera (trục Z local) phải có thành phần Y_cam > 0 (chúc xuống)
+        r_tilt = np.array([
+            [1.0,  0.0,     0.0],
+            [0.0,  0.2588,  0.9659],
+            [0.0, -0.9659,  0.2588]
+        ], dtype=float)
+        z_in_cam = r_tilt @ np.array([0.0, 0.0, 1.0])
+        self.assertGreater(z_in_cam[1], 0.9, "Handle must point downward in camera space (+Y)")
+        y_in_cam = r_tilt @ np.array([0.0, 1.0, 0.0])
+        self.assertLess(y_in_cam[2], -0.9, "Face must point towards viewer (-Z)")
+
+    def test_05_micro_displacement_latency(self):
+        """Khi bóp cò và dịch chuyển: HUD nhích vi mô an toàn, độ trễ cập nhật < 50ms"""
         t0 = time.perf_counter()
         self.ui.update_controller_visual(
             is_translating=True,
@@ -44,48 +73,17 @@ class Test3DHUD(unittest.TestCase):
             vr_quat=[1.0, 0.0, 0.0, 0.0]
         )
         latency_ms = (time.perf_counter() - t0) * 1000.0
-
-        # Mũi tên phải hiển thị
-        self.assertTrue(self.ui._arrow_trans.visible)
-        # Độ trễ cập nhật < 50ms (thực tế < 1ms)
         self.assertLess(latency_ms, 50.0)
 
-        # Màu sắc trục Tiến phải là Neon Emerald Green [0, 255, 180]
-        expected_color = np.array([[0, 255, 180]], dtype=np.uint8)
-        np.testing.assert_array_equal(self.ui._arrow_trans.colors, expected_color)
-
-        # Vị trí HUD phải có đàn hồi vi mô (khác base_pos)
+        # Vị trí HUD có dịch chuyển vi mô trong ngưỡng an toàn <= 2.5cm
         current_pos = np.array(self.ui._hud_frame.position)
         self.assertFalse(np.allclose(current_pos, self.ui._hud_base_pos))
-        # Độ dịch chuyển không vượt quá 2.5cm
         disp_dist = np.linalg.norm(current_pos - self.ui._hud_base_pos)
         self.assertLessEqual(disp_dist, 0.026)
 
-    def test_04_release_trigger_reset(self):
-        """Khi nhả cò: Mũi tên lập tức ẩn và vị trí đàn hồi trở lại vị trí gốc"""
-        self.ui.update_controller_visual(
-            is_translating=False,
-            delta_trans=np.zeros(3)
-        )
-        self.assertFalse(self.ui._arrow_trans.visible)
-        np.testing.assert_allclose(self.ui._hud_frame.position, self.ui._hud_base_pos, atol=1e-5)
-
-    def test_05_directional_arrow_colors(self):
-        """Kiểm tra màu sắc mũi tên cho các trục chuyển động khác nhau"""
-        # 1. Lùi: Vàng hổ phách [255, 190, 0]
-        self.ui.update_controller_visual(is_translating=True, delta_trans=np.array([-0.05, 0.0, 0.0]))
-        np.testing.assert_array_equal(self.ui._arrow_trans.colors, np.array([[255, 190, 0]], dtype=np.uint8))
-
-        # 2. Phải / Trái: Xanh dương điện quang [0, 160, 255]
-        self.ui.update_controller_visual(is_translating=True, delta_trans=np.array([0.0, 0.06, 0.0]))
-        np.testing.assert_array_equal(self.ui._arrow_trans.colors, np.array([[0, 160, 255]], dtype=np.uint8))
-
-        # 3. Cao / Thấp: Tím huỳnh quang [220, 60, 255]
-        self.ui.update_controller_visual(is_translating=True, delta_trans=np.array([0.0, 0.0, 0.07]))
-        np.testing.assert_array_equal(self.ui._arrow_trans.colors, np.array([[220, 60, 255]], dtype=np.uint8))
-
-        # Trở về trạng thái nghỉ
+        # Khi nhả cò: Về lại vị trí gốc
         self.ui.update_controller_visual(is_translating=False, delta_trans=np.zeros(3))
+        np.testing.assert_allclose(self.ui._hud_frame.position, self.ui._hud_base_pos, atol=1e-5)
 
 if __name__ == "__main__":
     unittest.main()

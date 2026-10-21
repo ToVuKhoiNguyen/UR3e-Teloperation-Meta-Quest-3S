@@ -175,8 +175,9 @@ class TeleopViserUI:
             wxyz=quat,
             scale=0.18,
             disable_sliders=False,
-            visible=True
+            visible=False
         )
+        self.server.scene.world_axes.visible = False
 
         # 2. Target widget wrapper điều khiển Gizmo (cách ly 100% với 3D HUD)
         self.target_widget = TargetWidgetWrapper(self._raw_gizmo)
@@ -193,16 +194,6 @@ class TeleopViserUI:
         )
         self._ctrl_frame = self._hud_frame  # Giữ alias cho backward-compatibility
 
-        # Mũi tên Vector 3D động biểu diễn hướng và cự ly tịnh tiến (Tiến/Lùi/Trái/Phải/Cao/Thấp)
-        self._arrow_trans = self.server.scene.add_arrows(
-            "vr_controller_hud/arrow_trans",
-            points=np.zeros((1, 2, 3), dtype=float),
-            colors=np.array([[0, 255, 180]], dtype=np.uint8),
-            shaft_radius=0.005,
-            head_radius=0.012,
-            head_length=0.025,
-            visible=False
-        )
 
         # Quản lý chế độ HUD (Viewport góc màn hình vs Fixed World góc bàn máy)
         self._hud_mode = "viewport"
@@ -252,7 +243,7 @@ class TeleopViserUI:
                         glb_data=glb_bytes,
                         position=(0.0, 0.0, 0.0),
                         wxyz=(1.0, 0.0, 0.0, 0.0),
-                        scale=1.0,
+                        scale=(-1.0, 1.0, 1.0),
                         visible=(mode == "idle")
                     )
                 except Exception as e:
@@ -330,7 +321,7 @@ class TeleopViserUI:
                 padding: 0 4px !important;
                 font-size: 0.85em !important;
             }
-            div:has(> div > #teleop-2x2-anchor) > div:nth-child(11) .mantine-Slider-root {
+            div:has(> div > #teleop-2x2-anchor) .mantine-Slider-root {
                 flex-grow: 1 !important;
                 min-width: 80px !important;
             }
@@ -347,80 +338,19 @@ class TeleopViserUI:
 
             self.server.gui.add_divider()
 
-            # 3. Nút khôi phục an toàn (Full width bên dưới cụm 2x2)
-            self.btn_home = self.server.gui.add_button("Go to Home")
-            self.server.gui.add_divider()
-
-            # 4. Thanh trượt tinh chỉnh độ nhạy di chuyển (Scale) theo thời gian thực
+            # 3. Thanh trượt tinh chỉnh tỉ lệ di chuyển (Scale) theo thời gian thực
             self.slider_sensitivity = self.server.gui.add_slider(
-                "Độ nhạy (Scale)",
+                "Scale",
                 min=0.25,
                 max=3.0,
                 step=0.05,
                 initial_value=1.0
             )
+            self.server.gui.add_divider()
 
-        # Thư mục điều khiển hiển thị 3D: Gizmo và Tay Cầm trên cùng một hàng ngang
-        with self.server.gui.add_folder("Hiển thị 3D", expand_by_default=True):
-            self.server.gui.add_html("""
-            <div id="vis-toggle-anchor" style="display:none;"></div>
-            <style>
-            div:has(> div > #vis-toggle-anchor) {
-                display: flex !important;
-                flex-wrap: wrap !important;
-                row-gap: 4px !important;
-            }
-            div:has(> div > #vis-toggle-anchor) > div:has(#vis-toggle-anchor) {
-                display: none !important;
-            }
-            div:has(> div > #vis-toggle-anchor) > div:nth-child(2),
-            div:has(> div > #vis-toggle-anchor) > div:nth-child(3) {
-                width: 50% !important;
-                box-sizing: border-box !important;
-                display: flex !important;
-                align-items: center !important;
-            }
-            div:has(> div > #vis-toggle-anchor) > div:nth-child(2) > div,
-            div:has(> div > #vis-toggle-anchor) > div:nth-child(3) > div {
-                width: 100% !important;
-                padding-bottom: 0 !important;
-            }
-            div:has(> div > #vis-toggle-anchor) .mantine-Flex-root {
-                justify-content: space-between !important;
-                width: 100% !important;
-            }
-            </style>
-            """)
-            self.cb_show_gizmo = self.server.gui.add_checkbox("Gizmo", initial_value=True)
-            self.cb_show_controller = self.server.gui.add_checkbox("Tay Cầm", initial_value=True)
+            # 4. Nút khôi phục an toàn (Full width bên dưới Scale)
+            self.btn_home = self.server.gui.add_button("Go to Home")
 
-            @self.cb_show_gizmo.on_update
-            def _(_):
-                self._raw_gizmo.visible = self.cb_show_gizmo.value
-
-            @self.cb_show_controller.on_update
-            def _(_):
-                self.update_controller_visual()
-
-            self.dropdown_hud_mode = self.server.gui.add_dropdown(
-                "Chế độ HUD",
-                options=["Góc Màn Hình (Viewport)", "Góc Bàn Máy (Fixed World)"],
-                initial_value="Góc Màn Hình (Viewport)"
-            )
-
-            @self.dropdown_hud_mode.on_update
-            def _(_):
-                if "viewport" in self.dropdown_hud_mode.value.lower() or "màn hình" in self.dropdown_hud_mode.value.lower():
-                    self._hud_mode = "viewport"
-                    for cam in self._client_cameras.values():
-                        self._sync_hud_to_camera(cam)
-                        break
-                else:
-                    self._hud_mode = "fixed_world"
-                    self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
-                    self._hud_base_wxyz = self._init_ctrl_wxyz
-                    self._hud_frame.position = tuple(self._hud_base_pos)
-                    self._hud_frame.wxyz = self._init_ctrl_wxyz
 
 
     def get_camera_view_mode(self) -> str:
@@ -489,11 +419,11 @@ class TeleopViserUI:
             s_down = 0.14
             self._hud_base_pos = np.array(cam.position) + d_fwd * u_fwd + s_right * u_right + s_down * u_down
 
-            # Hướng mặt điều khiển tay cầm nghiêng tự nhiên về phía camera
+            # Hướng mặt điều khiển tay cầm đứng thẳng tự nhiên (nghiêng 15 độ về phía camera)
             r_tilt = np.array([
                 [1.0,  0.0,     0.0],
-                [0.0,  0.866, -0.500],
-                [0.0,  0.500,  0.866]
+                [0.0,  0.2588,  0.9659],
+                [0.0, -0.9659,  0.2588]
             ], dtype=float)
             r_base = r_cam @ r_tilt
             self._hud_base_wxyz = tuple(transforms3d.quaternions.mat2quat(r_base))
@@ -520,11 +450,9 @@ class TeleopViserUI:
           2. Hướng xoay: Đồng bộ góc xoay cổ tay qua vr_quat.
           3. Dịch chuyển tịnh tiến: Cập nhật mũi tên 3D và độ đàn hồi vi mô.
         """
-        if not hasattr(self, "cb_show_controller") or not self.cb_show_controller.value:
+        if hasattr(self, "cb_show_controller") and not self.cb_show_controller.value:
             for h in self._ctrl_handles.values():
                 h.visible = False
-            if hasattr(self, "_arrow_trans"):
-                self._arrow_trans.visible = False
             return
 
         # 1. Quản lý biến thể màu sắc nút bấm
@@ -558,51 +486,30 @@ class TeleopViserUI:
                 if norm_q > 1e-4:
                     q /= norm_q
                     r_wrist = transforms3d.quaternions.quat2mat(q)
-                    r_hud = r_wrist @ self._r_align
+                    if self._hud_mode == "viewport" and hasattr(self, "_hud_base_wxyz"):
+                        r_base = transforms3d.quaternions.quat2mat(self._hud_base_wxyz)
+                        r_hud = r_base @ r_wrist
+                    else:
+                        r_hud = r_wrist @ self._r_align
                     self._hud_frame.wxyz = tuple(transforms3d.quaternions.mat2quat(r_hud))
             except Exception:
                 pass
         elif hasattr(self, "_hud_base_wxyz"):
             self._hud_frame.wxyz = self._hud_base_wxyz
 
-        # 3. Quản lý phản hồi tịnh tiến (Mũi tên Vector 3D & Độ đàn hồi vi mô)
-        if hasattr(self, "_arrow_trans") and hasattr(self, "_hud_frame"):
+        # 3. Quản lý phản hồi tịnh tiến (Độ đàn hồi vi mô)
+        if hasattr(self, "_hud_frame") and hasattr(self, "_hud_base_pos"):
             if is_translating and delta_trans is not None and len(delta_trans) == 3:
                 d_fwd = float(delta_trans[0])
                 d_lat = float(delta_trans[1])
                 d_vert = float(delta_trans[2])
                 mag = float(np.hypot(np.hypot(d_fwd, d_lat), d_vert))
-
                 if mag > 0.002:  # Ngưỡng nhạy 2mm
-                    # A. Đàn hồi vi mô (Micro-displacement tối đa 2.5cm)
                     k_spring = min(0.12, 0.025 / (mag + 1e-6))
                     disp = np.array([d_lat, -d_fwd, d_vert], dtype=float) * k_spring
                     self._hud_frame.position = tuple(self._hud_base_pos + disp)
-
-                    # B. Mũi tên 3D động biểu diễn hướng và độ lớn
-                    arrow_len = min(0.16, max(0.04, mag * 1.3))
-                    u_dir = np.array([d_lat, -d_fwd, d_vert], dtype=float) / mag
-                    p_start = np.array([0.0, 0.0, 0.02], dtype=float)
-                    p_end = p_start + u_dir * arrow_len
-                    self._arrow_trans.points = np.array([[p_start, p_end]], dtype=float)
-
-                    # Đổi màu mũi tên trực quan theo hướng chiếm ưu thế
-                    if abs(d_fwd) >= abs(d_lat) and abs(d_fwd) >= abs(d_vert):
-                        # Tiến: Xanh ngọc Neon, Lùi: Vàng hổ phách
-                        col = np.array([[0, 255, 180]], dtype=np.uint8) if d_fwd >= 0 else np.array([[255, 190, 0]], dtype=np.uint8)
-                    elif abs(d_lat) >= abs(d_vert):
-                        # Phải/Trái: Xanh dương điện quang
-                        col = np.array([[0, 160, 255]], dtype=np.uint8)
-                    else:
-                        # Cao/Thấp: Tím huỳnh quang
-                        col = np.array([[220, 60, 255]], dtype=np.uint8)
-
-                    self._arrow_trans.colors = col
-                    self._arrow_trans.visible = True
                 else:
-                    self._arrow_trans.visible = False
                     self._hud_frame.position = tuple(self._hud_base_pos)
             else:
-                self._arrow_trans.visible = False
                 self._hud_frame.position = tuple(self._hud_base_pos)
 

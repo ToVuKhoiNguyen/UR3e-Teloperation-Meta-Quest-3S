@@ -360,6 +360,7 @@ def main():
     _last_vr_gripper_raw = False
     _last_viser_cb_val = False
     _last_btn_b_state = False
+    _last_b_press_time = 0.0
     _last_thumbstick_click_state = False
     _last_trig_state = False
     _last_grip_state = False
@@ -449,29 +450,27 @@ def main():
         btn_b_triggered = _is_btn_b and not _last_btn_b_state
         _last_btn_b_state = _is_btn_b
         if btn_b_triggered:
-            if _is_grip:
-                pose_source.calibrate_desk(vr_frame)
-                quest_server.send_haptic(intensity=0.8, duration=150)
-                ui.set_status("Hiệu chuẩn bàn máy OK")
-                print("[VR Teleop] Grip + Nút B -> Hiệu chuẩn hướng bàn máy thành công.")
-            else:
-                new_teleop_state = not ui.cb_teleop.value
-                ui.cb_teleop.value = new_teleop_state
-                quest_server.set_drive_mode(new_teleop_state)
-                _last_quest_drive_mode = new_teleop_state
-                state_str = "BẬT" if new_teleop_state else "TẮT"
-                print(f"[VR Teleop] Nút B ấn -> Chuyển trạng thái Teleop: {state_str}")
-                quest_server.send_haptic(intensity=0.7, duration=150)
+            now_time = time.time()
+            if now_time - _last_b_press_time > 0.5:
+                _last_b_press_time = now_time
+                if _is_grip:
+                    pose_source.calibrate_desk(vr_frame)
+                    quest_server.send_haptic(intensity=0.8, duration=150)
+                    ui.set_status("Hiệu chuẩn bàn máy OK")
+                    print("[VR Teleop] Grip + Nút B -> Hiệu chuẩn hướng bàn máy thành công.")
+                else:
+                    new_teleop_state = not ui.cb_teleop.value
+                    ui.cb_teleop.value = new_teleop_state
+                    quest_server.set_drive_mode(new_teleop_state)
+                    _last_quest_drive_mode = new_teleop_state
+                    state_str = "BẬT" if new_teleop_state else "TẮT"
+                    print(f"[VR Teleop] Nút B ấn -> Chuyển trạng thái Teleop: {state_str}")
+                    quest_server.send_haptic(intensity=0.7, duration=150)
 
         # D. Cập nhật trạng thái kết nối
         ui.set_connected(quest_server.is_connected())
 
         # E. Đồng bộ bật/tắt Teleop
-        if quest_server.is_connected():
-            curr_quest_mode = quest_server.get_drive_mode()
-            if curr_quest_mode != _last_quest_drive_mode:
-                _last_quest_drive_mode = curr_quest_mode
-                ui.cb_teleop.value = curr_quest_mode
 
         if ui.cb_teleop.value != _last_teleop_state:
             _last_teleop_state = ui.cb_teleop.value
