@@ -97,31 +97,43 @@ def table_barrier_residual(
     robot: pk.Robot,
     joint_var: jaxls.Var,
     tcp_idx: jnp.ndarray,
+    cam_idx: jnp.ndarray,
     table_bounds: jnp.ndarray,  # [x_min, x_max, y_min, y_max, z_table_top, z_floor]
+    safety_margin: float = 0.04,
+    cam_radius: float = 0.035,
     weight_floor: float = 200.0,
     weight_table: float = 250.0,
 ) -> jnp.ndarray:
-    """Hàm phạt chống xuyên mặt bàn và sàn cho đầu gắp TCP (tool0)."""
+    """Hàm phạt chống xuyên mặt bàn và sàn cho cả đầu gắp TCP (tool0) và cụm camera RealSense D455."""
     q = vals[joint_var]
     Ts = robot.forward_kinematics(q)
-    tcp_xyz = Ts[tcp_idx, 4:7]
-    x, y, z = tcp_xyz[0], tcp_xyz[1], tcp_xyz[2]
+    p_tcp = Ts[tcp_idx, 4:7]
+    p_cam = Ts[cam_idx, 4:7]
 
-    # 1. Ràng buộc sàn (z >= z_floor)
-    z_floor = table_bounds[5]
-    floor_violation = jnp.maximum(0.0, z_floor - z)
-
-    # 2. Ràng buộc thể tích hình hộp bàn máy (obstacle_scene.yml)
     x_min, x_max = table_bounds[0], table_bounds[1]
     y_min, y_max = table_bounds[2], table_bounds[3]
     z_top = table_bounds[4]
-    in_table_xy = jnp.logical_and(
-        jnp.logical_and(x >= x_min, x <= x_max),
-        jnp.logical_and(y >= y_min, y <= y_max)
-    )
-    table_violation = jnp.where(in_table_xy, jnp.maximum(0.0, z_top - z), 0.0)
+    z_floor = table_bounds[5]
 
-    return jnp.array([floor_violation * weight_floor, table_violation * weight_table])
+    def calc_violation(p, margin):
+        x, y, z = p[0], p[1], p[2]
+        # 1. Ràng buộc sàn có khoảng đệm an toàn (z >= z_floor + margin)
+        v_floor = jnp.maximum(0.0, (z_floor + margin) - z)
+        # 2. Ràng buộc bàn máy có vùng mở rộng 3D (mở rộng biên XY và trần Z an toàn)
+        in_table_xy = jnp.logical_and(
+            jnp.logical_and(x >= x_min - margin, x <= x_max + margin),
+            jnp.logical_and(y >= y_min - margin, y <= y_max + margin)
+        )
+        v_table = jnp.where(in_table_xy, jnp.maximum(0.0, (z_top + margin) - z), 0.0)
+        return v_floor, v_table
+
+    vf_tcp, vt_tcp = calc_violation(p_tcp, safety_margin)
+    vf_cam, vt_cam = calc_violation(p_cam, safety_margin + cam_radius)
+
+    return jnp.array([
+        (vf_tcp + vf_cam) * weight_floor,
+        (vt_tcp + vt_cam) * weight_table
+    ])
 
 
 class PyrokiIKSolver:
@@ -149,6 +161,15 @@ class PyrokiIKSolver:
             raise ValueError(f"Không tìm thấy link '{self.tcp_link}' trong URDF. Các link có sẵn: {self.robot.links.names}")
 
         self.tcp_idx = jnp.array(self.robot.links.names.index(self.tcp_link))
+
+        # Tự động nhận diện link camera / ngàm trên cổ tay robot
+        if "d455_link" in self.robot.links.names:
+            self.cam_idx = jnp.array(self.robot.links.names.index("d455_link"))
+        elif "camera_mount_link" in self.robot.links.names:
+            self.cam_idx = jnp.array(self.robot.links.names.index("camera_mount_link"))
+        else:
+            self.cam_idx = self.tcp_idx
+
         self.q_var = self.robot.joint_var_cls(0)
         self.default_home = [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
 
@@ -164,6 +185,7 @@ class PyrokiIKSolver:
         robot = self.robot
         q_var = self.q_var
         tcp_idx = self.tcp_idx
+        cam_idx = self.cam_idx
         table_bounds = self.table_bounds
 
         @jax.jit
@@ -194,7 +216,10 @@ class PyrokiIKSolver:
                 robot=robot,
                 joint_var=q_var,
                 tcp_idx=tcp_idx,
+                cam_idx=cam_idx,
                 table_bounds=table_bounds,
+                safety_margin=0.04,
+                cam_radius=0.035,
                 weight_floor=200.0,
                 weight_table=250.0,
             )
