@@ -30,7 +30,7 @@ class DeltaPoseSource:
         self._ema_pos = None
         self._ema_quat_xyzw = None
         
-        self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "1") == "1"
+        self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "0") == "1"
         self.nav_mode = os.environ.get("NAV_MODE", "cylindrical").lower()
         self.rotation_mode = os.environ.get("ROTATION_MODE", "decoupled_3axis").lower()
         # Hiệu chuẩn hướng bàn máy (Desk-Aligned):
