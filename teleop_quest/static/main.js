@@ -387,6 +387,11 @@
                             let gripVal = (typeof b1.value === 'number') ? b1.value : (b1.pressed ? 1.0 : 0.0);
                             gripPressed = gripVal > 0.25;
                         }
+                        // Button 3: Thumbstick Click (nhấn cần gạt Analog) -> Lệnh Go Home
+                        if (activeSource.gamepad.buttons.length > 3) {
+                            let b3 = activeSource.gamepad.buttons[3];
+                            thumbstickClickPressed = Boolean(b3.pressed || (typeof b3.value === 'number' && b3.value > 0.5));
+                        }
                         // Button 4: Nút A (tay phải) hoặc Nút X (tay trái) - Kẹp/Nhả Gripper
                         if (activeSource.gamepad.buttons.length > 4) {
                             let b4 = activeSource.gamepad.buttons[4];
@@ -399,9 +404,12 @@
                         }
                     }
 
-                    // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nút X)
+                    // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nhấn L3 hoặc nút X)
                     for (let s of session.inputSources) {
                         if (s !== activeSource && s.gamepad && s.gamepad.buttons) {
+                            if (s.gamepad.buttons.length > 3 && s.gamepad.buttons[3].pressed) {
+                                thumbstickClickPressed = true;
+                            }
                             if (s.gamepad.buttons.length > 4 && s.gamepad.buttons[4].pressed) {
                                 gripperRawPressed = true;
                             }
@@ -435,8 +443,17 @@
                     }
 
                     let stickTilted = false;
-                    if (activeSource.gamepad && activeSource.gamepad.axes && activeSource.gamepad.axes.length >= 4) {
-                        stickTilted = Math.abs(activeSource.gamepad.axes[2]) > 0.15 || Math.abs(activeSource.gamepad.axes[3]) > 0.15;
+                    let stickX = 0.0;
+                    let stickY = 0.0;
+                    if (activeSource.gamepad && activeSource.gamepad.axes && activeSource.gamepad.axes.length >= 2) {
+                        if (activeSource.gamepad.axes.length >= 4) {
+                            stickX = activeSource.gamepad.axes[2];
+                            stickY = activeSource.gamepad.axes[3];
+                        } else {
+                            stickX = activeSource.gamepad.axes[0];
+                            stickY = activeSource.gamepad.axes[1];
+                        }
+                        stickTilted = Math.abs(stickX) > 0.15 || Math.abs(stickY) > 0.15;
                     }
 
                     ws.send(JSON.stringify({
@@ -454,9 +471,10 @@
                         button_a: gripperRawPressed,
                         button_b: btnBPressed,
                         thumbstick: stickTilted,
-                        thumbstick_click: false,
+                        thumbstick_click: thumbstickClickPressed,
+                        thumbstick_axes: [stickX, stickY],
                         joystick_tilt: stickTilted,
-                        home: false,
+                        home: thumbstickClickPressed,
                         drive_mode: true
                     }));
                     
