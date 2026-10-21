@@ -232,14 +232,14 @@ button {
 
 .badge {
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: 6px;
     font-size: 13px;
     font-weight: 700;
     color: white;
 }
 
 .badge.green {
-    background-color: #10b981;
+    background-color: #8ec542;
 }
 
 .badge.blue {
@@ -255,7 +255,7 @@ button {
 }
 
 .badge.gray {
-    background-color: #94a3b8;
+    background-color: #8795a5;
 }
 
 /* Main Form was merged into Sidebar */
@@ -275,8 +275,8 @@ button {
     aspect-ratio: 4 / 3;
     flex: none;
     background: #0f172a;
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
+    border: 1px solid #d1d9e2;
+    border-radius: 6px;
     box-shadow: inset 0 2px 4px rgba(0,0,0,0.15);
     display: flex;
     align-items: center;
@@ -299,9 +299,9 @@ button {
 #viser-view {
     flex: 1;
     background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+    border: 1px solid #dce2e8;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
     display: flex;
     overflow: hidden;
     pointer-events: auto; /* Phục hồi tương tác cho Viser 3D */
