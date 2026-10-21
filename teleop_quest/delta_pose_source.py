@@ -54,6 +54,10 @@ class DeltaPoseSource:
         self.fwd_deadband = float(os.environ.get("FWD_DEADBAND", "0.0015")) # 1.5mm (nhạy bén cho trục Tiến/Lùi dải nhỏ)
         self.lat_deadband = float(os.environ.get("LAT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu rung lắc ngang do bóp ngón trỏ)
         self.vert_deadband = float(os.environ.get("VERT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu vi rung nâng hạ tay)
+        self.enable_cross_axis_damping = os.environ.get("CROSS_AXIS_DAMPING_ENABLE", "1") == "1"
+        self.cross_axis_damping = float(os.environ.get("CROSS_AXIS_DAMPING", "0.55")) # Gọt bớt trục phụ về 55%
+        self.cross_axis_low = float(os.environ.get("CROSS_AXIS_THRESH_LOW", "0.30"))   # < 30%: gọt bớt 55%
+        self.cross_axis_high = float(os.environ.get("CROSS_AXIS_THRESH_HIGH", "0.60")) # > 60%: mở khóa 100%
         self.rot_snap_low = float(os.environ.get("ROT_SNAP_LOW", "0.55"))   # < 55%: khóa cứng rãnh đơn trục (Phương án A)
         self.rot_snap_high = float(os.environ.get("ROT_SNAP_HIGH", "0.75")) # > 75%: mở xoay 3D đa trục khi chủ ý bẻ chéo lớn
         self._last_dominant_rot_axis = None
@@ -114,6 +118,40 @@ class DeltaPoseSource:
             else:
                 out[i] = vec[i]
 
+        return out
+
+    def _apply_bidirectional_cross_axis_damping(self, delta_vec):
+        """
+        Bộ lọc giảm nhiễu chéo hai chiều (Bi-directional Cross-Axis Damping):
+        - Trục chính chiếm ưu thế giữ 100% biên độ cử động thật.
+        - Trục phụ có biên độ nhỏ (< 30% trục chính): gọt bớt còn 55% để triệt tiêu lực rung tay vô thức.
+        - Khoảng [30%, 60%]: chuyển tiếp mượt mà bằng đường cong Hermite smoothstep từ 0.55 -> 1.0.
+        - Khi > 60%: mở khóa hoàn toàn 100% cho phép di chuyển chéo đa trục tự do.
+        - Không dùng Hysteresis khóa cứng, không bao giờ ép về 0.0 để tránh khựng giật.
+        """
+        vec = np.array(delta_vec, dtype=float)
+        abs_v = np.abs(vec)
+        curr_max_idx = int(np.argmax(abs_v))
+        max_val = abs_v[curr_max_idx]
+        if max_val < 1e-4:
+            return vec
+
+        out = np.copy(vec)
+        low_t = self.cross_axis_low
+        high_t = self.cross_axis_high
+        min_scale = self.cross_axis_damping
+        for i in range(3):
+            if i == curr_max_idx:
+                continue
+            ratio = abs_v[i] / max_val
+            if ratio <= low_t:
+                scale = min_scale
+            elif ratio < high_t:
+                t = (ratio - low_t) / (high_t - low_t)
+                scale = min_scale + (1.0 - min_scale) * t * t * (3.0 - 2.0 * t)
+            else:
+                scale = 1.0
+            out[i] = vec[i] * scale
         return out
 
     def _apply_soft_rotation_snapping(self, rotvec_tcp, rot_deadband=None):
@@ -333,8 +371,13 @@ class DeltaPoseSource:
 
             delta_q_world = delta_q_raw
 
-            # Áp dụng Thuật toán triệt tiêu nhiễu chéo đa trục thông minh (Smooth Axis Isolation):
-            if self.enable_axis_snapping:
+            # Áp dụng Bộ lọc giảm nhiễu chéo hai chiều (Bi-directional Cross-Axis Damping):
+            if self.enable_cross_axis_damping:
+                d_damped = self._apply_bidirectional_cross_axis_damping(np.array([d_forward_raw, d_lateral_raw, d_vertical_raw]))
+                d_forward = d_damped[0]
+                d_lateral = d_damped[1]
+                d_vertical = d_damped[2]
+            elif self.enable_axis_snapping:
                 d_snapped = self._apply_aggressive_axis_isolation(np.array([d_forward_raw, d_lateral_raw, d_vertical_raw]))
                 d_forward = d_snapped[0]
                 d_lateral = d_snapped[1]
