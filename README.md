@@ -1,6 +1,6 @@
-# UR3e Teleoperation qua Meta Quest 3S, Viser 3D & CuRobo GPU IK
+# UR3e Teleoperation qua Meta Quest 3S, Viser 3D & PyRoki CPU IK
 
-Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleoperation) cho cánh tay robot công nghiệp Universal Robots UR3e sử dụng kính thực tế ảo Meta Quest 3S (WebXR) và chuột trên giao diện Web 3D Viser. Hệ thống giải bài toán động học nghịch (Inverse Kinematics) và kiểm tra va chạm hoàn toàn trên GPU bằng NVIDIA CuRobo, đồng thời hỗ trợ thu thập dữ liệu trình diễn (Demonstrations) chuẩn HDF5 phục vụ huấn luyện mô hình Robot AI (Imitation Learning, Diffusion Policy, ACT).
+Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleoperation) cho cánh tay robot công nghiệp Universal Robots UR3e sử dụng kính thực tế ảo Meta Quest 3S (WebXR) và chuột trên giao diện Web 3D Viser. Hệ thống giải bài toán động học nghịch (Inverse Kinematics) siêu tốc thuần CPU bằng Google PyRoki kết hợp JAX và `jaxls` (độ trễ ~1ms sau JIT warm-up, hoàn toàn không cần GPU NVIDIA/CUDA), đồng thời hỗ trợ thu thập dữ liệu trình diễn (Demonstrations) chuẩn HDF5 phục vụ huấn luyện mô hình Robot AI (Imitation Learning, Diffusion Policy, ACT).
 
 ---
 
@@ -11,24 +11,34 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
    - Bộ thực thi `ServoJExecutor` sử dụng tham số tối ưu chuẩn công nghiệp: `dt = 0.05`s, `lookahead_time = 0.12`s, `gain = 250`.
    - Cơ chế **Scaled Vector Rate Limiter** co giãn đồng bộ cả 6 khớp khi vượt ngưỡng vận tốc, bảo toàn 100% hướng vector trong không gian Descartes và loại bỏ hoàn toàn hiện tượng méo quỹ đạo/giật cục.
    - Kiến trúc đa luồng (`CameraStreamPipeline`): Tách riêng luồng render và truyền stream camera cổ tay, triệt tiêu hoàn toàn jitter timing cho vòng lặp điều khiển RTDE 20Hz.
+   - **Cơ chế Mặt Đồng Hồ (True Mechanical Clock Navigation):**
+     - **Phải/Trái:** Chỉ quay kim đồng hồ (khớp đế $q_0$) quanh trục Base Z đồng thời tự động bù góc xoay trục Z ngàm kẹp giữ nguyên hướng đối với bàn máy.
+     - **Tiến/Lùi:** Duỗi dài hoặc thu ngắn bắp tay theo đúng phương vươn cơ học $\vec{u}_{reach}$ của hướng $q_0$.
+     - **Cao/Thấp:** Nâng hạ độ cao Z thẳng đứng trên mặt bàn.
+     - **Hiệu chuẩn hướng Tiến theo bàn máy bằng nút B:** Bắt cạnh lên nút B lấy góc yaw của kính (`head_quat`) làm hệ quy chiếu bàn máy cố định (`_desk_u_fwd` và `_desk_u_right`).
+     - **Vùng chết tĩnh 3mm (`POS_DEADBAND = 0.003`m):** Triệt tiêu hoàn toàn vi rung sinh học khi bóp giữ phím.
    - Chế độ điều khiển VR phân tách chức năng:
-     - **Chỉ bóp Cò (Trigger):** Tịnh tiến không gian (World-Centric mapping, khóa góc xoay).
-     - **Chỉ bóp Grip (Nút hông):** Xoay đầu hút/gắp theo hệ tọa độ đầu công cụ (Tool-Centric mapping, khóa tịnh tiến).
-     - **Bóp cả Trigger + Grip:** Chuyển động tự do 6DoF đồng thời.
+     - **Chỉ bóp Cò (Trigger):** Tịnh tiến theo cơ chế Mặt Đồng Hồ (khóa góc xoay).
+     - **Chỉ bóp Grip (Nút hông):** Xoay đầu kẹp theo hệ tọa độ đầu công cụ (Tool-Centric mapping, khóa tịnh tiến).
+     - **Bóp cả Trigger + Grip:** Chuyển động phối hợp 6DoF đồng thời.
      - **Cơ chế Smart Clutch:** Tự động chốt mỏ neo mới (Reset Anchor) ngay khi thay đổi nút bấm, triệt tiêu hoàn toàn lỗi nhảy vọt tọa độ (teleport).
    - Chế độ điều khiển Chuột trên PC: Tương tác trực tiếp bằng cách kéo các trục tịnh tiến hoặc vòng xoay góc của khối Target Widget trên trình duyệt Viser.
 
-2. **Động Học Nghịch Tránh Va Chạm Trên GPU (NVIDIA CuRobo 0.8) & Tối Ưu Không Gian Khớp:**
-   - Giải bài toán IK thời gian thực trên GPU CUDA (3–6ms), tự động kiểm tra va chạm với bàn làm việc, vách ngăn và cụm camera/ngàm kẹp.
-   - Vùng an toàn tinh gọn: `collision_sphere_buffer: 0.005` (5mm) và các quả cầu ngàm kẹp/camera bán kính 2.2cm.
-   - Chuẩn hóa giới hạn góc khớp: Khớp khuỷu (`elbow_joint`) được mở rộng an toàn lên $[-2.80, 2.80]$ rad ($\approx \pm 160^\circ$) và cổ tay duy trì dải quay $\pm 2\pi$, loại bỏ triệt để hiện tượng kẹp góc sai lệch ép thuật toán đảo nhánh IK gây lỗi vặn xoắn khớp khi hạ thấp gắp cà chua.
-   - Cơ chế chống đảo nhánh IK (Branch Consistency Penalty): Bổ sung hệ số phạt lệch nhánh (`branch_penalty = 50.0` khi lệch $> 0.8$ rad) kết hợp 64 hạt giống (seeds) và 16 nghiệm trả về, giữ quỹ đạo luôn mượt mà và ổn định.
+2. **Động Học Nghịch Siêu Tốc Thuần CPU (PyRoki + JAX/jaxls) & Tối Ưu Không Gian Khớp:**
+   - Giải bài toán IK thời gian thực trên CPU bằng PyRoki kết hợp `jaxls` LeastSquaresProblem và JAX JIT compile (độ trễ siêu tốc ~1ms sau warm-up), loại bỏ 100% sự phụ thuộc vào card đồ họa NVIDIA hoặc CUDA runtime.
+   - Đồ thị tối ưu hóa chi phí hoàn chỉnh:
+     - `pose_cost_analytic_jac`: Bám vị trí (weight 50.0) và định hướng mục tiêu (weight 20.0).
+     - `limit_cost`: Ràng buộc giới hạn khớp (weight 0.5).
+     - `rest_cost`: Chi phí neo giữ dáng mồi (weight 0.02) kết hợp hạt giống chuẩn `q_var.with_value(seed)` đảm bảo liên tục nghiệm giữa các frame.
+   - Chuẩn hóa giới hạn góc khớp: Khớp khuỷu (`elbow_joint`) cho phép gập sâu an toàn $[-2.80, 2.80]$ rad ($\approx \pm 160^\circ$), khớp nâng vai `shoulder_lift_joint` trong $[- \pi, 0.25]$ rad chống chúi đập bàn, các khớp cổ tay mở rộng dải quay tự nhiên.
+   - Thuật toán `normalize_to_current`: Tự động tìm nghiệm góc khớp tương đương gần nhất với cấu hình hiện tại trong dải an toàn, triệt tiêu hoàn toàn hiện tượng vặn xoắn cổ tay hoặc đảo nhánh IK bất thường.
 
 3. **Luồng Stream Camera Cổ Tay Trực Tiếp (Real-time 20 FPS) & Driver Hợp Nhất:**
    - Khung "CAMERA STREAM" trên giao diện WebXR Cockpit và sidebar Viser hiển thị trực tiếp góc nhìn từ camera cổ tay robot ở tần số thời gian thực 20 FPS.
    - Driver camera hợp nhất (`camera_driver.py`) hỗ trợ chuyển đổi linh hoạt qua cờ dòng lệnh CLI:
      - **Camera mô phỏng 3D (`SyntheticWristCamera`):** Kết xuất đồ họa màu RGB 640x480, góc nhìn Eye-in-Hand từ đầu tay máy quan sát quả cà chua và khay chứa.
-     - **Camera vật lý thật (`RealWristCamera`):** Đọc trực tiếp luồng hình ảnh từ camera USB hoặc Intel RealSense qua OpenCV (`--camera real --camera-device 0`).
+     - **Camera vật lý thật (`RealWristCamera`):** Đọc trực tiếp luồng hình ảnh từ camera Intel RealSense (D435/D455) hoặc USB webcam qua driver `camera_driver.py` (`--camera real --camera-device 0`).
+   - Tích hợp mô hình ngàm kẹp + camera thực tế (`robot_camera_mount_1.stl`, `d455.stl`).
    - Tự động tích hợp thông tin trạng thái OSD (trạng thái ngàm kẹp Gripper) và truyền đồng thời qua kênh WebSocket và MJPEG `/video_feed`.
 
 4. **Mô Phỏng Gắp/Thả 3D & Cơ Chế Toggle Gripper:**
@@ -39,27 +49,27 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
 5. **Khóa Trục Xoay Cổ Tay Thông Minh (Soft Rotation Snapping):**
    - Giải quyết triệt để hiện tượng quay đa trục ký sinh khi gập hoặc chúc cổ tay (lỗi vô thức lắc ngang Yaw hoặc xoắn Roll khi đang muốn gập Pitch).
    - Áp dụng bộ lọc đường cong mềm tỷ lệ ba vùng theo độ lớn vector xoay:
-     - **Tỷ lệ xoay phụ $< 25\%$:** Triệt tiêu hoàn toàn góc xoay phụ về 0, khóa chuyển động quay chuẩn xác trên một trục duy nhất.
-     - **Tỷ lệ xoay phụ $25\% - 40\%$:** Làm mềm chuyển tiếp tuyến tính, không gây giật góc.
-     - **Tỷ lệ xoay phụ $> 40\%$:** Cho phép quay tự do 3D khi người dùng chủ động vặn xoay tổ hợp nhiều hướng.
+     - **Tỷ lệ xoay phụ $< 55\%$ (Soft Snapping Low):** Triệt tiêu hoàn toàn góc xoay phụ về 0, khóa chuyển động quay chuẩn xác trên một trục duy nhất.
+     - **Tỷ lệ xoay phụ $55\% - 75\%$:** Làm mềm chuyển tiếp bằng đường cong Hermite Smoothstep, không gây giật góc.
+     - **Tỷ lệ xoay phụ $> 75\%$ (Soft Snapping High):** Cho phép quay tự do 3D khi người dùng chủ động vặn xoay tổ hợp nhiều hướng.
 
 6. **Tự Động Kích Hoạt Docker URSim & Tiến Trình Nền ADB Watcher:**
-   - Khi khởi động chế độ mô phỏng (`127.0.0.1`), hệ thống tự động kiểm tra cổng 29999. Nếu URSim chưa bật, chương trình tự động chạy `docker start ursim` (hoặc khởi chạy kịch bản ROS 2 URSim) mà người dùng không cần mở thêm terminal phụ.
+   - Khi khởi động chế độ mô phỏng (`127.0.0.1`), hệ thống tự động kiểm tra cổng 29999. Nếu URSim chưa bật, chương trình tự động chạy `docker start ursim` mà người dùng không cần mở thêm terminal phụ.
    - Tích hợp tiến trình ngầm (`start_adb_watcher`) tự động kiểm tra cáp USB nối với kính Meta Quest mỗi 2.5 giây. Khi phát hiện kính đã cắm, hệ thống tự động chạy lệnh reverse toàn bộ cổng (`8443`, `8444`, `8445`, `8080`) vào `localhost`.
 
 7. **Cơ Chế Tự Động Thu Hồi Tọa Độ XYZ (Auto-Snap on Stuck) & Reset Seed Thoát Kẹt:**
-   - Khi robot gặp tình trạng kẹt tư thế (vặn xoắn khớp) hoặc vướng vật cản kéo dài quá 1.2 giây (`snap_threshold = 1.2`), hệ thống tự động rung phản hồi Haptic tới tay cầm và giật tọa độ Widget 3D về đúng đầu tay máy robot thật (`fk_res`).
+   - Khi robot gặp tình trạng kẹt tư thế (vặn xoắn khớp) hoặc vượt quá tầm với kéo dài quá 1.2 giây (`snap_threshold = 1.2`), hệ thống tự động rung phản hồi Haptic tới tay cầm và giật tọa độ Widget 3D về đúng đầu tay máy robot thật (`fk_res`).
    - Tự động gán lại hạt giống giải IK `teleop._last_valid_q = list(q_real)`, giúp thuật toán lập tức thoát kẹt và sẵn sàng nhận chuyển động mới từ người vận hành.
 
 8. **Tự Động Dọn Dẹp Kịch Bản Ngầm & Giải Phóng Thanh Ghi RTDE:**
-   - Bộ thực thi `ServoJExecutor` và controller `CuRoboURSim` tích hợp cơ chế tự động gửi lệnh `stop\n` tới Dashboard Server (Port 29999) trước khi kết nối RTDE.
+   - Bộ thực thi `ServoJExecutor` và controller `PyrokiURSim` tích hợp cơ chế tự động gửi lệnh `stop\n` tới Dashboard Server (Port 29999) trước khi kết nối RTDE.
    - Loại bỏ hoàn toàn lỗi xung đột thanh ghi (`One of the RTDE input registers are already in use!`) hoặc treo tiến trình khi khởi động lại sau các lần thoát đột ngột.
    - Tự động fallback sang dải thanh ghi trên (`FLAG_UPPER_RANGE_REGISTERS`) nếu kết nối trên robot thật có cấu hình fieldbus (Profinet/EtherNet-IP).
 
 9. **Quy Hoạch Trở Về Home An Toàn Không Giật & Chống Rung Lắc Hình Ảnh:**
-   - Chuyển đổi phương thức thực thi quy hoạch Home từ vòng lặp `servoJ` rời rạc sang bộ sinh quỹ đạo phần cứng `movej` chạy ở tần số 500Hz trực tiếp trong bộ điều khiển Universal Robots qua cổng Secondary Port 30002.
-   - Tự động hòa trộn góc bo cung (`blend radius = 0.025`m) khi bám theo các waypoints né vật cản từ CuRobo `MotionPlanner`, triệt tiêu 100% hiện tượng giật cục cơ học do thiếu hụt buffer servoJ.
-   - Loại bỏ xung đột đa luồng cập nhật Viser 3D, xóa bỏ triệt để hiện tượng glitch hình ảnh chập chờn.
+   - Quy hoạch 2 pha an toàn thuần CPU qua URScript `movej` chạy ở tần số 500Hz trực tiếp trong bộ điều khiển Universal Robots qua cổng Secondary Port 30002: Pha 1 nâng khuỷu và vai lên cao tránh quẹt mặt bàn, Pha 2 di chuyển đồng bộ về vị trí Home an toàn.
+   - Tự động hòa trộn góc bo cung (`blend radius = 0.03`m giữa các waypoint), triệt tiêu 100% hiện tượng dừng giật cơ học.
+   - Vòng lặp giám sát cập nhật dáng robot trên Viser 3D ở tần số 25Hz mượt mà theo góc khớp thực của robot, loại bỏ hoàn toàn glitch hình ảnh chập chờn.
 
 10. **Tự Động Tái Kích Hoạt Teleop Sau Khi Về Home (Zero-Click Auto Reconnect):**
     - Tích hợp cờ giám sát `_was_navigating_home`, tự động tái kết nối RTDE `executor.connect()`, đặt lại mỏ neo tay cầm VR `pose_source.reset_anchor()` và đưa hệ thống vào trạng thái sẵn sàng điều khiển ngay khi robot về tới Home mà người dùng không cần phải click tắt/bật lại checkbox thủ công.
@@ -80,19 +90,19 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
 
 14. **Các Lớp Bảo Vệ An Toàn (Safety Gate & Singularity Guard):**
     - **Giám sát điểm kỳ dị (Singularity Guard):** Đánh giá ma trận Jacobian thời gian thực, tự động chặn lệnh nếu giá trị suy biến nhỏ nhất $\sigma_{min} < 0.035$.
-    - **Chống chúi cắm bắp tay:** Giới hạn góc nâng vai `shoulder_lift_joint` $\le +0.05$ rad để ngăn ngừa rủi ro đâm bắp tay xuống mặt bàn.
+    - **Chống chúi cắm bắp tay:** Giới hạn góc nâng vai `shoulder_lift_joint` $\le +0.25$ rad để ngăn ngừa rủi ro đâm bắp tay xuống mặt bàn.
     - **Giới hạn tốc độ và gia tốc (Scaled Vector Rate Limiter):** Kẹp vận tốc góc khớp tối đa $\le 0.6$ rad/s ($\approx 34.4^\circ$/s) để tái hiện chuyển động êm ái, an toàn.
     - **Phát hiện lật nhánh IK:** Chặn các bước nhảy góc khớp đột ngột (`max_jump > 1.5` rad).
     - **Giám sát mất kết nối (Timeout Watchdog):** Tự động dừng khẩn cấp robot qua `servoStop` nếu mất tín hiệu VR quá thời gian timeout.
 
 15. **Kiến Trúc Mô-đun Hóa Tinh Gọn (Single Responsibility Architecture):**
-    - Phân tách độc lập các khối chức năng: `bootstrap.py` (khởi tạo hệ sinh thái phần mềm và kết nối phần cứng), `camera_pipeline.py` (luồng đa nhiệm camera & OSD), `main_quest.py` (bộ điều phối trung tâm) và `teleop_quest/__init__.py` xuất khẩu các interface tiêu chuẩn.
+    - Phân tách độc lập các khối chức năng: `teleop/pyroki_solver.py` (bộ giải PyRoki IK/FK CPU), `bootstrap.py` (khởi tạo hệ sinh thái phần mềm và kết nối phần cứng), `camera_pipeline.py` (luồng đa nhiệm camera & OSD), `camera_driver.py` (driver camera ảo và RealSense), `main_quest.py` (bộ điều phối trung tâm) và `teleop_quest/__init__.py` xuất khẩu các interface tiêu chuẩn.
 
 ---
 
 ## 2. Kiến Trúc & Luồng Hoạt Động Của Hệ Thống
 
-Toàn bộ hệ thống điều khiển viễn thao vận hành theo luồng khép kín thời gian thực ở tần số 20Hz (chu kỳ 50ms), kết nối đồng bộ giữa giao diện điều khiển (Chuột trên PC / Kính Meta Quest 3S), máy chủ giải thuật GPU CuRobo và bộ điều khiển robot Universal Robots UR3e.
+Toàn bộ hệ thống điều khiển viễn thao vận hành theo luồng khép kín thời gian thực ở tần số 20Hz (chu kỳ 50ms), kết nối đồng bộ giữa giao diện điều khiển (Chuột trên PC / Kính Meta Quest 3S), máy chủ giải thuật PyRoki CPU và bộ điều khiển robot Universal Robots UR3e qua các cổng mạng chuyên dụng: cổng 29999 (Dashboard Server), cổng 30002 (URScript Secondary Interface), cổng 30003/30004 (RTDE ServoJ & Receive Interface), cổng 8443 (HTTPS WebXR), cổng 8444 (WSS Quest WebXR) và cổng 8445 (WS PC Local Preview).
 
 ### 2.1. Sơ Đồ Khối Luồng Dữ Liệu
 
@@ -102,7 +112,7 @@ Toàn bộ hệ thống điều khiển viễn thao vận hành theo luồng kh�
           │                                        │
           ▼ (WebSocket WSS 8444)                   │
 [QuestServer & DeltaPoseSource]                    │
-  (World-Centric, Soft Snapping, Smart Clutch)     │
+  (Cơ chế Mặt Đồng Hồ, Nút B Desk-Aligned, Clutch) │
           │                                        │
           └───────────────┬────────────────────────┘
                           ▼
@@ -110,15 +120,15 @@ Toàn bộ hệ thống điều khiển viễn thao vận hành theo luồng kh�
            (Tọa độ đích 6DoF: X, Y, Z, Qw, Qx, Qy, Qz)
                           │
                           ▼
-              [CuRobo IK Solver (GPU CUDA)]
-           (Batched seeds, tránh va chạm 3-5ms -> q_target)
+              [PyRoki IK Solver (JAX CPU)]
+           (JIT warm-up ~1ms, jaxls, rest_cost -> q_target)
                           │
                           ▼
               [SafetyGate & SingularityGuard]
            (Jacobian sigma_min >= 0.035, Rate Limiter)
                           │
                           ▼
-              [ServoJExecutor (RTDE Cổng 30004)]
+              [ServoJExecutor (RTDE Cổng 30003/30004)]
            (servoJ với lookahead_time = 0.12s, gain = 250)
                           │
                           ▼
@@ -137,6 +147,7 @@ Hệ thống thiết lập 2 chế độ vận hành độc lập, hỗ trợ đ
 1. **Chế độ Cầm lái (Drive Mode - Mặc định khi vào VR):**
    - **Mục đích:** Vừa quan sát toàn bộ giao diện Cockpit HUD (mô hình 3D, camera cổ tay, tọa độ thời gian thực) nổi trước mắt, vừa tự do điều khiển cánh tay robot bằng tay cầm mà không bị vướng chuột ảo.
    - **Tương tác:** Giao diện HUD tự động kích hoạt chế độ xuyên thấu triệt để (`pointer-events: none !important`). Hệ điều hành Meta Horizon OS sẽ tắt hoàn toàn tia laser 2D. Lúc này mọi thao tác bóp cò Trigger, bóp Grip và bấm nút A/X được chuyển 100% sang điều khiển robot 6DoF, không còn hiện tượng "di chuột trên màn hình".
+   - **Hiệu chuẩn hướng bàn máy:** Nhấn nút **B** (tay phải) hoặc **Y** (tay trái) khi nhìn về phía trước mép bàn để lập tức khóa góc yaw đầu làm trục hướng Tiến chuẩn cho cơ chế Mặt Đồng Hồ.
    - **Phản hồi thời gian thực:** Thẻ `ROBOT POSE` cập nhật liên tục tọa độ Position (X, Y, Z tính bằng mét) và Orientation (Qx, Qy, Qz, Qw) từ vòng lặp RTDE 20Hz của cánh tay robot UR3e thực tế. Thẻ `VR CONTROLLER` hiển thị trạng thái các nút bấm.
    - **Cách kích hoạt:** Mặc định tự động bật khi người dùng bấm *START IMMERSIVE VR*, hoặc bấm phím cứng **B** (tay phải) / **Y** (tay trái) trên tay cầm, hoặc click nút *Lock UI* trên menu HUD.
 
@@ -148,17 +159,18 @@ Hệ thống thiết lập 2 chế độ vận hành độc lập, hỗ trợ đ
 
 ### 2.3. Quy Trình Vòng Lặp Điều Khiển Thời Gian Thực (Chu Kỳ 20Hz - 50ms)
 
-Trong mỗi chu kỳ 50ms của [main_quest.py](file:///home/nguyen/ur_ws/curobo_ursim/teleop_quest/main_quest.py), hệ thống thực thi tuần tự 6 công đoạn:
+Trong mỗi chu kỳ 50ms của [main_quest.py](file:///home/nguyen/ur_ws/pyroki_ursim/teleop_quest/main_quest.py), hệ thống thực thi tuần tự 6 công đoạn:
 
 1. **Bước 1: Thu thập & Lọc tín hiệu điều khiển (`DeltaPoseSource` / `WidgetPoseSource`):**
-   - Khi dùng kính Quest: Cò trỏ (Trigger) phụ trách tịnh tiến XYZ (World-Centric), cò báng (Grip) phụ trách xoay hướng công cụ (Tool-Centric), nút A/X chuyển đổi trạng thái ngàm kẹp theo cơ chế Toggle.
-   - Áp dụng bộ lọc Soft Rotation Snapping triệt tiêu dao động góc quay phụ khi gập cổ tay.
+   - Khi dùng kính Quest: Áp dụng cơ chế Mặt Đồng Hồ (Cò trỏ Trigger phụ trách di chuyển Tiến/Lùi dọc theo phương vươn $q_0$, Phải/Trái xoay góc đế $q_0$ kèm bù góc Z ngàm kẹp, Cao/Thấp nâng hạ Z; Cò báng Grip phụ trách xoay hướng ngàm; nút A/X chuyển đổi trạng thái ngàm kẹp Toggle; nút B hiệu chuẩn hướng bàn máy).
+   - Áp dụng bộ lọc Soft Rotation Snapping triệt tiêu dao động góc quay phụ khi gập cổ tay và deadband 3mm chống rung tĩnh.
    - Khi dùng chuột: Tọa độ đích được cập nhật trực tiếp từ khối Target Widget trên không gian 3D của Viser.
-   - Giới hạn Safe Box kẹp chặt tọa độ mục tiêu trong tầm với an toàn của UR3e ($X, Y \in [-0.45, 0.45]$m, $Z \in [-0.02, 0.55]$m).
+   - Giới hạn Workspace an toàn: $X, Y \in [-0.49, 0.49]$m, $Z \in [0.00, 0.58]$m (an toàn tuyệt đối không va chạm mặt bàn), bán kính vươn XY kẹp trong $[0.10, 0.485]$m bảo vệ tầm với 500mm của UR3e.
 
-2. **Bước 2: Giải ngược động học và tránh va chạm trên GPU (`CuRoboIKSolver`):**
-   - Nhận tọa độ mục tiêu 6DoF từ Widget 3D, giải bài toán IK phi tuyến kết hợp kiểm tra va chạm trên GPU NVIDIA trong khoảng 3–5ms.
-   - Sử dụng 64 hạt giống song song (seeds) và hệ số phạt lệch nhánh (`branch_penalty = 50.0`), đảm bảo nghiệm góc khớp trả về liên tục và không bị lật khớp cổ tay.
+2. **Bước 2: Giải ngược động học siêu tốc trên CPU (`PyrokiIKSolver`):**
+   - Nhận tọa độ mục tiêu 6DoF từ Widget 3D, giải bài toán IK phi tuyến bằng PyRoki + `jaxls` trên CPU trong khoảng ~1ms sau JIT warm-up.
+   - Áp dụng hàm chi phí `rest_cost` (weight 0.02) kết hợp hạt giống `q_seed` từ frame trước qua `q_var.with_value(seed)`, đảm bảo nghiệm mượt mà không nhảy nhánh.
+   - Chuẩn hóa góc khớp `normalize_to_current` và xác thực giới hạn góc an toàn `validate_joints`.
 
 3. **Bước 3: Kiểm định an toàn và điểm kỳ dị (`SafetyGate` & `SingularityGuard`):**
    - Đánh giá ma trận Jacobian của cấu hình góc khớp mục tiêu, đo lường giá trị suy biến nhỏ nhất $\sigma_{min}$.
@@ -167,7 +179,7 @@ Trong mỗi chu kỳ 50ms của [main_quest.py](file:///home/nguyen/ur_ws/curobo
 
 4. **Bước 4: Thực thi lệnh chuyển động thời gian thực (`ServoJExecutor`):**
    - Đảm bảo giải phóng thanh ghi RTDE thông qua lệnh Dashboard `stop\n`.
-   - Truyền gói dữ liệu 6 góc khớp mục tiêu $q_{target}$ qua giao thức RTDE (Cổng 30004) bằng lệnh `servoJ` với `lookahead_time = 0.12`s và `gain = 250`.
+   - Truyền gói dữ liệu 6 góc khớp mục tiêu $q_{target}$ qua giao thức RTDE (Cổng 30003/30004) bằng lệnh `servoJ` với `lookahead_time = 0.12`s và `gain = 250`.
    - Robot phản hồi bám sát tức thì với độ trễ chuyển động thực tế dưới 10ms.
 
 5. **Bước 5: Mô phỏng gắp nhặt & Ghi tập dữ liệu AI (`GraspSimulator` & `DataLogger`):**
@@ -175,7 +187,7 @@ Trong mỗi chu kỳ 50ms của [main_quest.py](file:///home/nguyen/ur_ws/curobo
    - Khi cờ ghi hình kích hoạt (`ui.cb_record`), module `DataLogger` lưu trữ đồng bộ trạng thái góc khớp thực tế, vận tốc, tọa độ TCP, lệnh điều khiển, trạng thái kẹp và ảnh camera thô vào tệp HDF5 theo chu kỳ cố định 20Hz.
 
 6. **Bước 6: Thu nhận hình ảnh camera cổ tay độc lập (`CameraStreamPipeline`):**
-   - Luồng nền camera thu nhận ảnh ở tần số 20 FPS từ camera ảo 3D hoặc camera vật lý thật gắn trên cổ tay (RGB 640x480).
+   - Luồng nền camera thu nhận ảnh ở tần số 20 FPS từ camera ảo 3D hoặc camera vật lý thật RealSense D435/D455 gắn trên cổ tay (RGB 640x480).
    - Tích hợp lớp phủ OSD hiển thị trạng thái ngàm kẹp, nén định dạng JPEG chất lượng cao và phát trực tiếp tới cả sidebar Viser và WebXR Cockpit qua WebSocket và MJPEG.
 
 ---
@@ -184,41 +196,41 @@ Trong mỗi chu kỳ 50ms của [main_quest.py](file:///home/nguyen/ur_ws/curobo
 
 ### Yêu Cầu Hệ Thống
 - **Hệ điều hành:** Ubuntu 20.04 hoặc 22.04 LTS (x86_64).
-- **Phần cứng:** NVIDIA GPU hỗ trợ CUDA 12.0+ (khuyến nghị RTX 3060 trở lên).
-- **Bộ điều khiển Robot:** Trình giả lập URSim trên Docker hoặc Cánh tay UR3e thật (Cổng 29999 Dashboard, 30004 RTDE).
+- **Phần cứng:** CPU đa nhân (Intel Core i5/i7/i9 hoặc AMD Ryzen 5/7/9). Không yêu cầu card đồ họa rời NVIDIA hay GPU CUDA.
+- **Bộ điều khiển Robot:** Trình giả lập URSim trên Docker hoặc Cánh tay UR3e thật (Cổng 29999 Dashboard, 30002 Secondary URScript, 30003/30004 RTDE).
 
 ### Bảng Thư Viện Python
 
 | Thư viện | Phiên bản | Vai trò trong hệ thống |
 | :--- | :--- | :--- |
-| `torch`, `torchvision` | 2.1.0+ (CUDA) | Tính toán ma trận Tensor GPU cho CuRobo và Jacobian singularity metric. |
-| `curobo` | 0.8.0+ | Bộ giải IK và quy hoạch tránh va chạm trên GPU NVIDIA. |
+| `jax[cpu]`, `jaxlie` | 0.4.20+, 1.0.0+ | Tính toán đại số vi phân Lie và biên dịch JIT siêu tốc trên CPU. |
+| `jaxls` | git (brentyi/jaxls) | Bộ giải bình phương tối thiểu phi tuyến (Levenberg-Marquardt) cho IK. |
+| `pyroki` | git (chungmin99/pyroki) | Thư viện động học học máy và tối ưu hóa robot trên JAX. |
+| `yourdfpy` | 0.0.53+ | Tải và phân tích mô hình robot URDF (`assets/ur3e_custom.urdf`). |
+| `robot_descriptions` | 1.10.0+ | Nạp mô tả động học robot và các tài nguyên mô hình tiêu chuẩn. |
+| `torch` | 2.0.0+ (CPU) | Tính toán ma trận Jacobian cho SingularityGuard metric. |
 | `viser` | 0.2.0+ | Máy chủ WebGL 3D Visualization, Gizmo tương tác và Web UI. |
-| `ur_rtde` | 1.5.0+ | Giao tiếp thời gian thực RTDE với bộ điều khiển UR qua cổng 30004. |
-| `opencv-python` | 4.8.0+ | Render và thu nhận ảnh camera cổ tay (640x480), nén MJPEG và overlay OSD. |
-| `transforms3d` | 0.4.0+ | Chuyển đổi giữa Axis-Angle, Quaternion và ma trận quay. |
-| `trimesh` | 4.0.0+ | Tải và phân tích mô hình lưới 3D robot và vật cản. |
+| `ur_rtde` | 1.5.0+ | Giao tiếp thời gian thực RTDE với bộ điều khiển UR qua cổng 30003/30004. |
+| `opencv-python-headless` | 4.8.0+ | Render và thu nhận ảnh camera cổ tay (640x480), nén MJPEG và overlay OSD. |
+| `pyrealsense2` | 2.54.0+ | Driver giao tiếp trực tiếp camera độ sâu Intel RealSense D435/D455. |
+| `transforms3d` | 0.4.1+ | Chuyển đổi giữa Axis-Angle, Quaternion và ma trận quay. |
+| `trimesh` | 4.0.0+ | Tải và phân tích mô hình lưới 3D robot, ngàm camera và vật cản. |
 | `h5py` | 3.9.0+ | Ghi và đọc tập dữ liệu AI Demonstration chuẩn HDF5. |
-| `pyyaml` | 6.0+ | Đọc file cấu hình robot (`ur3e_custom.yml`) và cảnh vật cản (`obstacle_scene.yml`). |
-| `websockets` | 12.0+ | Máy chủ truyền nhận dữ liệu 6DoF từ tay cầm WebXR với độ trễ thấp. |
+| `pyyaml` | 6.0+ | Đọc file cấu hình cảnh vật cản (`obstacle_scene.yml`) và ngưỡng kỳ dị (`singularity.yaml`). |
+| `aiohttp` | 3.8.0+ | Máy chủ truyền nhận dữ liệu WebXR và WebSocket với độ trễ thấp. |
 | `cryptography` | 41.0+ | Tự động sinh chứng chỉ SSL/TLS cho máy chủ HTTPS WebXR. |
-| `numpy`, `scipy` | 1.24+ | Tính toán đại số tuyến tính, phép quay SE(3) và bộ lọc làm mượt tín hiệu. |
+| `numpy`, `scipy` | 1.24+, 1.11+ | Tính toán đại số tuyến tính, phép quay SE(3) và bộ lọc làm mượt tín hiệu. |
 
 ### Lệnh Cài Đặt
 
 ```bash
-# Tạo và kích hoạt môi trường ảo
-python3 -m venv ~/curobo/.venv
-source ~/curobo/.venv/bin/activate
+# Tạo và kích hoạt môi trường ảo Python 3.11
+python3 -m venv /home/nguyen/ur_ws/pyroki_ursim/.venv
+source /home/nguyen/ur_ws/pyroki_ursim/.venv/bin/activate
 
-# Cài đặt PyTorch với hỗ trợ CUDA (Ví dụ CUDA 12.1)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# Cài đặt các thư viện phụ trợ
-pip install viser ur_rtde opencv-python transforms3d trimesh h5py pyyaml websockets cryptography numpy scipy
-
-# Cài đặt NVIDIA CuRobo
-pip install curobo --extra-index-url https://pypi.nvidia.com
+# Nâng cấp pip và cài đặt toàn bộ gói phụ thuộc từ requirements.txt
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
 ---
@@ -226,17 +238,21 @@ pip install curobo --extra-index-url https://pypi.nvidia.com
 ## 4. Cấu Trúc Thư Mục Dự Án
 
 ```text
-ur_ws/curobo_ursim/
+ur_ws/pyroki_ursim/
 ├── main.py                          # Điểm khởi chạy CLI duy nhất của hệ thống
 ├── README.md                        # Tài liệu hướng dẫn sử dụng hệ thống
+├── requirements.txt                 # Danh sách gói phụ thuộc Python (PyRoki, JAX, ur_rtde, viser)
+├── reset_home.py                    # Script hỗ trợ khẩn cấp đưa robot về Home qua URScript
 ├── assets/
 │   ├── ur3e_custom.urdf             # URDF UR3e mô tả link, khớp và tool0
-│   ├── ur3e_custom.yml              # Cấu hình CuRobo kinematics, collision spheres và giới hạn khớp
-│   └── obstacle_scene.yml           # Cấu hình mặt bàn và vách ngăn vật cản
+│   ├── obstacle_scene.yml           # Cấu hình kích thước bàn máy làm việc tham chiếu
+│   ├── robot_camera_mount_1.stl     # Mô hình 3D ngàm gắn camera RealSense vào bích tool0
+│   ├── d455.stl                     # Mô hình 3D camera Intel RealSense D455
+│   └── quest3_ctrl_*.glb            # Mô hình 3D tay cầm Meta Quest 3S hiển thị trực quan
 ├── config/
 │   └── singularity.yaml             # Ngưỡng an toàn Jacobian singularity (sigma_min)
 ├── core/
-│   ├── curobo_ursim_control.py      # Bộ giải CuRoboIK (GPU batched seeds, dashboard auto-stop)
+│   ├── pyroki_ursim_control.py      # Bộ điều khiển PyrokiURSim (JAX CPU IK, URScript, RTDE)
 │   ├── data_logger.py               # Module ghi Demonstration HDF5 ở tần số 20Hz
 │   ├── verify_dataset.py            # Công cụ kiểm tra chất lượng tập dữ liệu HDF5
 │   └── replay_episode.py            # Công cụ tái hiện quỹ đạo thao tác
@@ -247,21 +263,23 @@ ur_ws/curobo_ursim/
 │       ├── jacobian_metrics.py      # Tính toán sigma_min từ ma trận Jacobian
 │       └── calibration.py           # Cân chỉnh ngưỡng kỳ dị theo không gian làm việc
 ├── teleop/
+│   ├── __init__.py                  # Khởi tạo module teleop
+│   ├── pyroki_solver.py             # Bộ giải PyrokiIKSolver (JAX JIT CPU, ~1ms, rest_cost)
 │   └── teleoperation.py             # TeleoperationController, ServoJExecutor, SafetyGate
 ├── teleop_quest/
 │   ├── __init__.py                  # Xuất khẩu các lớp và hàm chính của package
 │   ├── bootstrap.py                 # Khởi tạo Docker URSim, ADB watcher, config & SSL
 │   ├── camera_pipeline.py           # Quản lý luồng nền camera, preview OSD & streaming
-│   ├── camera_driver.py             # Driver camera cổ tay hợp nhất: Ảo 3D & Camera thật
+│   ├── camera_driver.py             # Driver camera cổ tay hợp nhất: Ảo 3D & RealSense thật
 │   ├── synthetic_camera.py          # Render camera ảo cổ tay 640x480 (Eye-in-Hand)
 │   ├── viser_ui.py                  # Giao diện Viser 3D Cockpit và bảng điều khiển 2x2
 │   ├── grasp_simulator.py           # Mô phỏng gắp/thả quả cà chua 3D vào giỏ
-│   ├── quest_server.py              # Server HTTPS (8443), WSS (8444) và MJPEG stream
+│   ├── quest_server.py              # Server HTTPS (8443), WSS (8444) và WS plain (8445)
 │   ├── network_utils.py             # Dò tìm IP LAN và tự động sinh chứng chỉ SSL
 │   ├── pose_sources.py              # WidgetPoseSource (đọc tọa độ Widget kèm bộ lọc EMA)
-│   ├── delta_pose_source.py         # Chuyển đổi vi phân Quest, khóa hướng đế q0 & Soft Snapping
+│   ├── delta_pose_source.py         # Cơ chế Mặt Đồng Hồ, nút B hiệu chuẩn bàn máy, deadband 3mm
 │   ├── timeout_watchdog.py          # E-Stop và dừng khẩn cấp robot khi mất tín hiệu
-│   ├── home_planner.py              # Đưa robot về vị trí Home an toàn (movej 500Hz)
+│   ├── home_planner.py              # Đưa robot về Home an toàn 2 pha (movej 500Hz, cổng 30002)
 │   ├── setup_quest_adb.sh           # Script chuyển tiếp cổng ADB sang localhost cho Quest
 │   └── static/
 │       ├── index.html               # Giao diện WebXR Cockpit trên kính Quest
@@ -269,6 +287,7 @@ ur_ws/curobo_ursim/
 │       └── style.css                # Style hiển thị phong cách HUD hiện đại
 └── tests/
     ├── test_camera.py               # Kiểm thử render camera ảo ở các góc nhìn & giao diện GUI
+    ├── test_realsense.py            # Kiểm thử kết nối và đọc luồng ảnh camera Intel RealSense
     ├── test_simulated_pick_and_place.py # Kiểm thử tự động pick-place cà chua và xuất HDF5
     └── test_singularity_guard.py    # Kiểm thử tính toán Jacobian singularity metric (sigma_min)
 ```
@@ -281,8 +300,8 @@ ur_ws/curobo_ursim/
 Bạn chỉ cần thực thi một lệnh duy nhất. Hệ thống sẽ tự động kiểm tra và khởi động container Docker URSim nếu đang chạy mô phỏng cục bộ:
 
 ```bash
-cd /home/nguyen/ur_ws/curobo_ursim
-source ~/curobo/.venv/bin/activate
+cd /home/nguyen/ur_ws/pyroki_ursim
+source .venv/bin/activate
 
 # 1. Chạy với URSim mô phỏng (Camera ảo 3D - Mặc định, tự động kích hoạt Docker URSim):
 python3 main.py
@@ -290,7 +309,7 @@ python3 main.py
 # 2. Chạy với Robot UR3e thật:
 python3 main.py --robot-ip 10.42.0.242
 
-# 3. Chạy với Robot UR3e thật kèm Camera vật lý (USB Camera / RealSense):
+# 3. Chạy với Robot UR3e thật kèm Camera vật lý (Intel RealSense / USB Webcam):
 python3 main.py --robot-ip 10.42.0.242 --camera real --camera-device 0
 ```
 
@@ -298,11 +317,15 @@ Các tham số dòng lệnh được hỗ trợ:
 - `--robot-ip`: Địa chỉ IP của Robot thật hoặc URSim (ví dụ: `10.42.0.242`, mặc định: `127.0.0.1`).
 - `--camera`: Nguồn camera cổ tay: `synthetic` (mô phỏng) hoặc `real` (camera thật) (mặc định: `synthetic`).
 - `--camera-device`: Chỉ số Device ID của camera thật (mặc định: `0`).
+- `--camera-serial`: Serial number chỉ định khi dùng nhiều camera RealSense.
 
 Hệ thống sẽ hiển thị các cổng truy cập:
 - Viser Dashboard: `http://localhost:8080`
 - WebXR Quest (Wi-Fi): `https://<IP_LAN>:8443`
 - WebXR Quest (Cáp USB ADB): `https://localhost:8443`
+- Cổng WebSocket WebXR Quest: `wss://<IP_LAN>:8444`
+- Cổng WebSocket PC / Local Preview: `ws://localhost:8445`
+- Giao diện URSim PolyScope (noVNC): `http://192.168.56.101:6080/vnc.html` (hoặc `http://localhost:6080`)
 
 ### Bước 2: Điều khiển bằng Viser Web UI (Máy tính)
 1. Mở trình duyệt web trên máy tính và truy cập `http://localhost:8080`.
@@ -313,7 +336,7 @@ Hệ thống sẽ hiển thị các cổng truy cập:
    - **Record AI Episode:** Tích chọn để bắt đầu ghi chuỗi thao tác phục vụ huấn luyện mô hình Robot AI.
    - **Hủy Episode (Discard):** Tích chọn khi thực hiện thao tác hỏng; hệ thống sẽ hủy bỏ dữ liệu tập hiện tại và tự động nhả checkbox sau 200ms.
 4. **Điều khiển chuyển động:** Dùng chuột nhấp và kéo các trục mũi tên hoặc vòng xoay của khối Target Widget 3D: Cánh tay robot sẽ chuyển động bám theo tọa độ đích của chuột trong thời gian thực.
-5. **Trở về vị trí an toàn:** Bấm nút **Go to Home** khi cần đưa robot về vị trí mặc định an toàn. Quỹ đạo chuyển động được điều phối mượt mà không rung giật (MoveJ 500Hz), không glitch hình ảnh và tự động kích hoạt lại chế độ Teleop sau khi robot về đích.
+5. **Trở về vị trí an toàn:** Bấm nút **Go to Home** khi cần đưa robot về vị trí mặc định an toàn. Quỹ đạo chuyển động 2 pha được điều phối mượt mà không rung giật (MoveJ 500Hz qua cổng 30002), cập nhật Viser 25Hz, không glitch hình ảnh và tự động kích hoạt lại chế độ Teleop sau khi robot về đích.
 
 ### Bước 3: Hướng Dẫn Chi Tiết Điều Khiển Bằng Kính Meta Quest 3S (WebXR)
 
@@ -322,16 +345,20 @@ Hệ thống sẽ hiển thị các cổng truy cập:
 | Phím bấm | Ngón tay thao tác | Cơ chế điều khiển | Mô tả chi tiết hành vi |
 | :--- | :--- | :--- | :--- |
 | **Nhấn cần gạt Thumbstick (R3/L3)** | Ngón cái | **Về Vị Trí An Toàn (Go Home)** | **Nhấn 1 lần vào cần gạt Analog** (hoặc nhấn giữ nút B/Y trong 3 giây) để tự động đưa cánh tay robot về vị trí Home an toàn. Tay cầm rung xác nhận 2 nhịp, tự động mở khóa bảo vệ và tái kích hoạt Teleop khi về đích. |
-| **Nút B (Tay phải) / Y (Tay trái)** | Ngón cái | **Chuyển Chế Độ / Về Home** | - **Bấm nhanh (< 3s):** Chuyển đổi giữa **Edit Mode** (chỉnh UI Cockpit) và **Drive Mode** (lái robot).<br>- **Nhấn giữ (> 3s):** Kích hoạt lệnh **Go Home** đưa robot về vị trí an toàn. |
-| **Cò Trỏ (Index Trigger)** | Ngón trỏ | **Tịnh Tiến Không Gian (Arm-Plane / Cartesian)** | Bấm giữ cò và di chuyển tay trong không gian để tịnh tiến đầu robot. Hướng tiến luôn bám theo góc khớp đế $q_0$. Góc xoay cổ tay được khóa cố định. |
+| **Nút B (Tay phải) / Y (Tay trái)** | Ngón cái | **Hiệu Chuẩn Bàn Máy / Đổi Chế Độ** | - **Bấm nhanh (< 3s):** Hiệu chuẩn hướng Tiến chuẩn theo bàn máy (lấy góc yaw đầu) đồng thời chuyển đổi giữa **Edit Mode** và **Drive Mode**.<br>- **Nhấn giữ (> 3s):** Kích hoạt lệnh **Go Home** đưa robot về vị trí an toàn. |
+| **Cò Trỏ (Index Trigger)** | Ngón trỏ | **Tịnh Tiến Mặt Đồng Hồ (Clock Face Translation)** | Bấm giữ cò và di chuyển tay: **Tiến/Lùi** duỗi/thu bắp tay theo phương vươn $q_0$; **Phải/Trái** quay đế $q_0$ quanh Base Z kèm bù góc Z ngàm kẹp; **Cao/Thấp** nâng hạ Z thẳng đứng. Deadband tĩnh 3mm. |
 | **Nút Hông (Hand Grip)** | Ngón giữa / ngón áp út | **Xoay 3 Trục Độc Lập (Decoupled 3-Axis Rotation)** | Bấm giữ nút hông để xoay ngàm gắp trên cả 3 trục: Gập/chúc (Pitch), Lắc ngang (Yaw), và Vặn ngàm (Roll). Hệ thống tích hợp bộ lọc trực giao World Frame và Khóa trục thông minh (Soft Rotation Snapping), triệt tiêu hoàn toàn hiện tượng rò rỉ chéo trục khi gập mở cổ tay. |
 | **Nút A (Tay phải) / X (Tay trái)** | Ngón cái | **Bật / Tắt Ngàm Kẹp (Toggle Gripper)** | **Nhấn 1 lần** để kẹp/hút quả cà chua, **nhấn lần nữa** để nhả vật thể vào giỏ. Tay cầm rung phản hồi haptic mỗi lần bấm. |
 | **Nút Meta (Oculus)** | Ngón cái (Tay phải) | **Căn Chuẩn Trục Nhìn (Recenter)** | Nhấn giữ 2 giây để đồng bộ lại hệ trục phòng của kính Meta Quest. |
 
 #### 3.2. Cơ Chế Khóa Hướng Tiến Theo Đế Robot ($q_0$)
 Khi người vận hành đứng ở các góc khác nhau quanh robot hoặc khi đế robot đã xoay một góc $q_0$:
-- Thao tác đẩy tay ra xa hoặc kéo về gần người sẽ luôn di chuyển dọc theo mặt phẳng cánh tay vươn của robot.
-- Triệt tiêu hoàn toàn hiện tượng robot bị bẻ ngoặt hoặc quay vòng khi người dùng kéo tay thẳng về sau.
+- **Tâm đồng hồ:** Trục quay khớp đế Base Z $(0, 0)$.
+- **Kim đồng hồ:** Góc vật lý của khớp đế $q_0$.
+- **Thao tác Sang Phải / Sang Trái:** Quay kim đồng hồ (khớp đế $q_0$) quanh Base Z (sang Phải quay theo chiều kim đồng hồ, sang Trái quay ngược chiều kim đồng hồ), đồng thời tự động bù góc xoay trục Z ngàm kẹp để giữ ngàm luôn hướng thẳng vào bàn máy.
+- **Thao tác Tiến / Lùi:** Duỗi dài hoặc thu ngắn kim đồng hồ theo đúng phương vươn cơ học $\vec{u}_{reach} = [\cos(q_0), \sin(q_0), 0.0]$, triệt tiêu hoàn toàn hiện tượng robot bị bẻ ngoặt hoặc quay vòng khi kéo tay thẳng về sau.
+- **Thao tác Cao / Thấp:** Nâng hạ độ cao Z thẳng đứng trên mặt bàn làm việc, luôn nằm trong khoảng an toàn $Z \in [0.00, 0.58]$m.
+- **Hiệu chuẩn hướng Tiến theo bàn máy bằng nút B:** Khi đứng trước bàn máy, người dùng chỉ cần nhìn thẳng mép bàn và bấm phím **B**. Hệ thống lập tức trích xuất góc yaw của đầu kính (`head_quat`) làm vector hướng Tiến chuẩn (`_desk_u_fwd`) và hướng Phải chuẩn (`_desk_u_right`), đảm bảo các lần vươn tay sau đó luôn trùng khớp 100% với cạnh bàn.
 
 #### 3.3. Hệ Thống Lọc Nhiễu Đa Tầng & Xoay 3 Trục Độc Lập (Anti-Noise & Arm-Plane Decoupled 3-Axis)
 Nhằm mang lại chuyển động siêu êm, loại bỏ triệt để rung lắc sinh trắc học và tracking jitter:
@@ -341,16 +368,16 @@ Nhằm mang lại chuyển động siêu êm, loại bỏ triệt để rung l�
   - **Tilt (Vặn chìa khóa quanh cẳng tay):** Nghiêng đầu ngàm kẹp sang trái hoặc sang phải (Lateral Tilt quanh trục vươn của cánh tay $\vec{u}_{reach}$), phản hồi trực quan theo hướng vặn chìa khóa.
 - **Đồng bộ hóa theo Mặt Phẳng Cánh Tay (Arm-Plane Rotation Mapping):** Trục gập (Pitch quanh $\vec{u}_{lateral}$) và trục nghiêng hai bên (Tilt quanh $\vec{u}_{reach}$) tự động bám theo góc vươn của cánh tay robot ($q_0$). Khi bấm giữ cả 2 nút (vừa kéo tay thu về vừa ngửa cổ tay), chuyển động tịnh tiến và gập ngửa hòa làm một chuyển động liền mạch dọc theo đúng hướng cánh tay thu về, không bị lệch pha hay ngoẹo góc.
 - **Khóa rãnh đơn trục triệt để (Soft Snapping < 55%):** Nâng ngưỡng khóa trục phụ lên $55\%$ để triệt tiêu hoàn toàn góc kéo xéo sinh học tự nhiên khi thao tác. Khi gập ngửa hoặc lắc cổ tay, robot chỉ chuyển động thẳng tắp trên trục mong muốn, triệt tiêu $100\%$ hiện tượng lắc chao đảo phụ. Chuyển tiếp mượt sang xoay 3D đa trục khi chủ ý bẻ góc lớn ($> 75\%$).
-- **Vùng chết mềm chống vi rung (Soft Deadband $2.6^\circ$ & $6\text{mm}$):** Khi người vận hành bấm giữ phím Grip hoặc Trigger mà vẫn giữ yên tay, mọi dao động run cơ học tự nhiên được hấp thụ hoàn toàn về $0.00$. Chuyển động bắt đầu từ $0$ liên tục, không bị nhảy cóc khi vượt ngưỡng.
+- **Vùng chết mềm chống vi rung (Soft Deadband $2.6^\circ$ & $3\text{mm}$):** Khi người vận hành bấm giữ phím Grip hoặc Trigger mà vẫn giữ yên tay, mọi dao động run cơ học tự nhiên được hấp thụ hoàn toàn về $0.00$ (`POS_DEADBAND = 0.003`m). Chuyển động bắt đầu từ $0$ liên tục, không bị nhảy cóc khi vượt ngưỡng.
 - **Chốt giữ trục chính (Hysteresis Latch):** Ngăn chặn hiện tượng lật trục chập chờn (Chatter) khi người dùng thao tác ở ranh giới giữa 2 trục, ưu tiên giữ ổn định trục ban đầu trừ khi trục mới vượt trội > 15%.
 - **Bộ lọc thích ứng động (Dynamic Adaptive EMA & Slew Rate Limiter):**
-  - **Trên không gian trắc địa $SO(3)$ và $\mathbb{R}^3$:** Khi tay đứng yên hoặc vi rung chậm, hệ số $\alpha$ tự động giảm thấp ($\alpha \approx 0.18$) để lọc phẳng hoàn toàn nhiễu tracking IMU. Khi di chuyển dứt khoát, $\alpha$ tự động tăng cao ($\alpha \approx 0.40 - 0.48$) để phản hồi tức thì với độ trễ cực thấp.
-  - **Giới hạn biến thiên tối đa (Slew Rate Limiter):** Khống chế bước nhảy tối đa $3.5\text{cm}/50\text{ms}$ và $11.5^\circ/50\text{ms}$, triệt tiêu nguy cơ robot bị giật nảy đột biến khi WebXR rớt frame hoặc tracking bị vấp.
+  - **Trên không gian trắc địa $SO(3)$ và $\mathbb{R}^3$:** Khi tay đứng yên hoặc vi rung chậm, hệ số $\alpha$ tự động giảm thấp ($\alpha \approx 0.18$) để lọc phẳng hoàn toàn nhiễu tracking IMU. Khi di chuyển dứt khoát, $\alpha$ tự động tăng cao ($\alpha \approx 0.28 - 0.40$) để phản hồi tức thì với độ trễ cực thấp.
+  - **Giới hạn biến thiên tối đa (Slew Rate Limiter):** Khống chế bước nhảy tối đa $5.5\text{cm}/50\text{ms}$ (tương đương vận tốc $1.1\text{m/s}$) và $11.5^\circ/50\text{ms}$, triệt tiêu nguy cơ robot bị giật nảy đột biến khi WebXR rớt frame hoặc tracking bị vấp.
 - **Tùy biến linh hoạt qua biến môi trường:**
   - `ROTATION_MODE=decoupled_3axis` (Mặc định): Điều khiển 3 trục độc lập theo Arm-Plane với hệ thống lọc nhiễu đa tầng.
   - `ROTATION_MODE=table_roll`: Khóa chúc ngàm cố định vuông góc bàn, chỉ Roll quanh trục kẹp.
   - `ROTATION_MODE=free_3d`: Xoay 3D tự do.
-  - `ROT_DEADBAND` (Mặc định `0.045` rad ~ $2.6^\circ$), `POS_DEADBAND` (Mặc định `0.006` m ~ $6\text{mm}$).
+  - `ROT_DEADBAND` (Mặc định `0.045` rad ~ $2.6^\circ$), `POS_DEADBAND` (Mặc định `0.003` m ~ $3\text{mm}$).
   - `ROT_SNAP_LOW` (Mặc định `0.55`), `ROT_SNAP_HIGH` (Mặc định `0.75`).
 
 #### 3.4. Bảng Quy Chuẩn Điều Khiển & Kịch Bản Kiểm Thử (Đã Xác Thực Đúng Logic & Sẵn Sàng Vận Hành)
@@ -373,7 +400,7 @@ Khi cần điều khiển robot di chuyển quãng đường dài vượt quá t
 
 #### 3.6. Kết Nối Kính Meta Quest Qua Cáp USB (ADB Reverse Cực Nhanh)
 Khi cắm cáp USB giữa PC và kính Meta Quest:
-1. Tiến trình ngầm `start_adb_watcher` trong [bootstrap.py](file:///home/nguyen/ur_ws/curobo_ursim/teleop_quest/bootstrap.py) sẽ tự động nhận diện thiết bị và chạy script chuyển tiếp cổng.
+1. Tiến trình ngầm `start_adb_watcher` trong [bootstrap.py](file:///home/nguyen/ur_ws/pyroki_ursim/teleop_quest/bootstrap.py) sẽ tự động nhận diện thiết bị và chạy script chuyển tiếp cổng.
 2. Nếu kính báo `unauthorized`, hãy đeo kính lên và nhấn **"Allow USB Debugging"** (và tích chọn "Always allow from this computer").
 3. Khi thông báo kết nối thành công xuất hiện trên terminal, chỉ cần mở Meta Quest Browser trên kính và truy cập:
    ```text
@@ -402,7 +429,7 @@ Mô hình tay cầm VR hoạt động như một bản sao kỹ thuật số (Di
   - **Bóp Grip:** Sáng màu vàng cam (báo hiệu điều khiển xoay 3 trục).
   - **Bóp cả 2 phím (Trigger + Grip):** Sáng màu xanh dương ngọc (báo hiệu phối hợp 6-DOF).
   - **Bấm nút A / X (Gripper):** Sáng màu tím hồng / Magenta (báo hiệu thao tác đóng/mở ngàm kẹp).
-  - **Bấm nút B / Y:** Sáng màu vàng kim / Gold (báo hiệu chuyển đổi Drive Mode).
+  - **Bấm nút B / Y:** Sáng màu vàng kim / Gold (báo hiệu chuyển đổi Drive Mode và hiệu chuẩn bàn máy).
   - **Xoay / Gạt cần Joystick (Analog Tilt):** Sáng màu tím hoa cà / Violet (báo hiệu thao tác điều hướng joystick).
   - **Nhấn Joystick / Đang chạy về Home (Go Home):** Sáng màu xanh dương công nghệ / Royal Blue (báo hiệu lệnh và quá trình đưa robot về Home an toàn).
 - **Thanh công cụ "Hiển thị 3D" trên Viser (Bật/Tắt độc lập):**
@@ -435,7 +462,7 @@ Mô hình tay cầm VR hoạt động như một bản sao kỹ thuật số (Di
    - Ở góc trên cùng bên phải màn hình PolyScope, chuyển chế độ từ **Local** sang **Remote Control**.
 2. **Cài đặt Tải trọng Đầu Gắp (Payload & Center of Gravity - CoG):**
    - Vào **Installation** -> **General** -> **Payload**.
-   - Cài đặt chính xác khối lượng ngàm kẹp + camera (ví dụ Robotiq 2F-85 + RealSense $\approx 1.1$kg) và tọa độ trọng tâm CoG.
+   - Cài đặt chính xác khối lượng ngàm kẹp + camera (ví dụ Robotiq 2F-85 + RealSense D435 $\approx 1.1$kg) và tọa độ trọng tâm CoG.
 3. **Bật nguồn và Nhả phanh:**
    - Kích hoạt nguồn (Power On) và bấm **Release Brakes** để robot vào trạng thái sẵn sàng hoạt động (màn hình hiển thị màu xanh lá).
 4. **Hạ thanh trượt Tốc độ (Speed Slider):**
@@ -448,7 +475,7 @@ Khởi chạy hệ thống bằng lệnh:
 ```bash
 python3 main.py --robot-ip 192.168.1.100
 ```
-Nếu có camera vật lý USB hoặc RealSense gắn tại cổ tay:
+Nếu có camera vật lý Intel RealSense hoặc USB gắn tại cổ tay:
 ```bash
 python3 main.py --robot-ip 192.168.1.100 --camera real --camera-device 0
 ```
@@ -460,7 +487,7 @@ python3 main.py --robot-ip 192.168.1.100 --camera real --camera-device 0
 ### 1. Kiểm thử tự động Gắp Cà chua & Xuất HDF5
 Chạy kiểm thử toàn bộ chu trình gắp thả và lưu dữ liệu:
 ```bash
-/home/nguyen/curobo/.venv/bin/python tests/test_simulated_pick_and_place.py
+python3 tests/test_simulated_pick_and_place.py
 ```
 Kết quả kiểm tra:
 - Tập tin Demonstration HDF5 được tạo tại: `logs/ai_training_data/test_grasp_sim/episode_X.hdf5`.
@@ -469,36 +496,36 @@ Kết quả kiểm tra:
 ### 2. Kiểm thử Camera ảo Cổ tay (Synthetic Wrist Camera)
 Kiểm tra khả năng render camera cổ tay ở 4 góc nhìn khác nhau:
 ```bash
-/home/nguyen/curobo/.venv/bin/python tests/test_camera.py
+python3 tests/test_camera.py
 ```
 Các file ảnh kết xuất sẽ được lưu vào thư mục `logs/` (`test_cam_center.jpg`, `test_cam_left.jpg`,...).
 
 Nếu muốn kiểm tra trực quan bằng thanh trượt trên giao diện Web Viser:
 ```bash
-/home/nguyen/curobo/.venv/bin/python tests/test_camera.py --gui
+python3 tests/test_camera.py --gui
 ```
 Sau đó mở trình duyệt tại `http://localhost:8089` để kéo tọa độ quả cà chua trực tiếp.
 
 ### 3. Kiểm thử Lớp Bảo Vệ Điểm Kỳ Dị (Singularity Guard)
 ```bash
-/home/nguyen/curobo/.venv/bin/python tests/test_singularity_guard.py
+python3 tests/test_singularity_guard.py
 ```
-Kiểm tra tính toán ma trận Jacobian metric ($\sigma_{min}$) trên GPU ở cả tư thế an toàn lẫn tư thế duỗi thẳng cổ tay ($q_5 \approx 0$).
+Kiểm tra tính toán ma trận Jacobian metric ($\sigma_{min}$) trên CPU ở cả tư thế an toàn lẫn tư thế duỗi thẳng cổ tay ($q_5 \approx 0$).
 
 ### 4. Kiểm định chất lượng Tập Dữ Liệu (Sanity Check)
 ```bash
-/home/nguyen/curobo/.venv/bin/python core/verify_dataset.py
+python3 core/verify_dataset.py
 ```
 Kiểm tra toàn vẹn các episode: xác minh không có giá trị `NaN`/`Inf`, kiểm tra độ lệch chu kỳ lấy mẫu `dt`, kiểm tra số frame và độ phân giải ảnh camera.
 
 ### 5. Tái lập Quỹ đạo Demonstration (Replay)
 - **Offline Dry-Run (kiểm tra quỹ đạo an toàn trên Viser, không gửi lệnh sang robot):**
   ```bash
-  /home/nguyen/curobo/.venv/bin/python core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5
+  python3 core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5
   ```
 - **Live Replay (gửi lệnh điều khiển trực tiếp tới URSim / Robot thật):**
   ```bash
-  /home/nguyen/curobo/.venv/bin/python core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5 --execute --ip 127.0.0.1
+  python3 core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5 --execute --ip 127.0.0.1
   ```
 
 ---
@@ -507,26 +534,28 @@ Kiểm tra toàn vẹn các episode: xác minh không có giá trị `NaN`/`Inf`
 
 | Tham số | Giá trị | Giải thích kỹ thuật |
 | :--- | :--- | :--- |
-| **Tần số vòng lặp chính** | 20 Hz (`dt = 0.05`s) | Đồng bộ giữa WebXR, Viser, CuRobo và RTDE servoJ. |
+| **Tần số vòng lặp chính** | 20 Hz (`dt = 0.05`s) | Đồng bộ giữa WebXR, Viser, PyRoki và RTDE servoJ. |
 | **Tần số Camera Stream** | 20 FPS | Luồng nền `CameraStreamPipeline` độc lập, triệt tiêu giật lag cho vòng lặp RTDE. |
+| **Thời gian giải PyRoki IK (CPU)** | `~1.0` ms | Giải trên CPU bằng JAX JIT sau warm-up, Levenberg-Marquardt qua `jaxls`. |
+| **Chi phí dáng mồi IK (rest_cost)** | `weight = 0.02` | Neo giữ nghiệm bám theo hạt giống `seed` của frame trước, đảm bảo tính liên tục. |
+| **Hạt giống giải IK (seed)** | `q_var.with_value(seed)` | Khởi tạo nghiệm xấp xỉ bằng góc khớp hiện tại, hội tụ cực nhanh. |
 | **ServoJ Lookahead Time** | `0.12` s | Nội suy dự đoán đa chu kỳ chuẩn Universal Robots, triệt tiêu vi rung giật. |
 | **ServoJ Gain** | `250` | Độ cứng vị trí tối ưu trên robot vật lý, giúp chuyển động lướt êm ái không bị gắt cơ học. |
 | **Vận tốc khớp tối đa (Rate Limiter)** | `0.6` rad/s ($\approx 34.4^\circ$/s) | Scaled Vector Limiter co giãn đồng bộ cả 6 khớp, phản hồi nhanh nhạy và mượt mà. |
 | **Ngưỡng phát hiện vặn xoắn khớp** | `1.5` rad | Chặn những bước nhảy đột ngột do đảo nghiệm IK gần điểm kỳ dị. |
-| **Giới hạn khớp khuỷu (elbow_joint)** | `[-2.80, 2.80]` rad | Cho phép gập sâu tự nhiên (~160 độ) khi hạ thấp gắp cà chua, CuRobo tự quản lý va chạm. |
-| **Giới hạn khớp cổ tay (wrist_1, wrist_2)** | `[-2π, 2π]` rad | Duy trì dải quay đầy đủ của URDF, loại bỏ triệt để hiện tượng đảo nhánh vặn xoắn. |
-| **Giới hạn khớp nâng vai (shoulder_lift)** | `[-π, 0.05]` rad | Chống chúi cắm bắp tay xuống mặt bàn làm việc. |
-| **Thuật toán quy hoạch Home** | URScript `movej` | Chạy trực tiếp ở tần số 500Hz trên URControl (`a=0.8` rad/s², `v=0.5` rad/s), triệt tiêu rung giật. |
-| **Bán kính bo cung waypoints Home** | `0.025` m | Bo cong góc mượt mà qua các điểm trung gian của CuRobo MotionPlanner. |
+| **Giới hạn khớp khuỷu (elbow_joint)** | `[-2.80, 2.80]` rad | Cho phép gập sâu tự nhiên (~160 độ) khi hạ thấp gắp cà chua, PyRoki quản lý góc khớp an toàn. |
+| **Giới hạn khớp cổ tay (wrist_1, wrist_2)** | `[-2π, 2π]` rad | Duy trì dải quay đầy đủ của URDF, kết hợp `normalize_to_current` chống vặn xoắn. |
+| **Giới hạn khớp nâng vai (shoulder_lift)** | `[-π, 0.25]` rad | Cho phép vươn tự nhiên, chống chúi lật cắm bắp tay xuống mặt bàn. |
+| **Thuật toán quy hoạch Home** | URScript 2 pha `movej` | Chạy trực tiếp ở tần số 500Hz trên URControl qua cổng Secondary 30002 (`a=0.8`, `v=0.5`). |
+| **Bán kính bo cung waypoints Home** | `0.03` m | Bo cong góc mượt mà qua điểm trung gian nâng cao trước khi về Home. |
+| **Tần số cập nhật Viser khi về Home** | 25 Hz (`dt = 0.04`s) | Cập nhật dáng robot Viser 3D mượt mà theo góc khớp thực trong suốt quá trình về Home. |
 | **Khôi phục Teleop sau khi về Home** | Tự động (Zero-Click) | Tự động kết nối lại RTDE và reset mỏ neo tay cầm VR ngay khi robot về đích. |
-| **Số hạt giống CuRobo IK** | 64 seeds | Nâng cao xác suất tìm nghiệm liên tục trên GPU. |
-| **Hệ số phạt lệch nhánh IK** | `50.0` (khi lệch $> 0.8$ rad) | Giữ robot luôn ở nhánh động học đồng nhất với vị trí hiện tại. |
-| **Deadband tĩnh tay cầm VR** | 5 mm (`0.005` m) | Loại bỏ rung tay sinh lý với cơ chế trừ mềm (Soft Deadband). |
+| **Deadband tĩnh tay cầm VR** | 3 mm (`0.003` m) | Loại bỏ vi rung tay sinh học với cơ chế trừ mềm (`POS_DEADBAND`). |
 | **Tỷ lệ truyền chuyển động tay (scale)** | `0.75` | Tỷ lệ 75% giúp robot bám sát chuyển động tay nhanh nhạy, giảm mỏi khi vung tay. |
 | **Độ lệch tay cầm tối đa (max_delta_m)** | `0.22` m | Phạm vi vươn dài hơn mỗi nhịp bóp cò, thoải mái bao quát không gian làm việc. |
-| **Bộ lọc làm mượt EMA (Alpha)** | `0.28` | Giảm độ trễ lọc tín hiệu từ 200ms xuống ~170ms, giúp bám tay tức thì mà vẫn êm ái. |
+| **Bộ lọc làm mượt EMA (Alpha)** | `0.28` | Lọc tín hiệu thích ứng nhanh nhạy, giúp bám tay tức thì mà vẫn êm ái. |
 | **Ngưỡng thời gian Auto-Snap** | 1.2 s | Tự động kéo XYZ về đầu tay máy và reset seed khi bị kẹt tư thế hoặc vướng vật cản. |
-| **Khóa trục xoay cổ tay (Soft Snapping)** | $<25\%$ (cắt về 0), $25-40\%$ (làm mềm) | Triệt tiêu góc xoay phụ khi gập/chúc cổ tay, bảo vệ trục quay chính xác. |
+| **Khóa trục xoay cổ tay (Soft Snapping)** | $<55\%$ (cắt về 0), $55-75\%$ (làm mềm) | Triệt tiêu góc xoay phụ khi gập/chúc cổ tay, bảo vệ trục quay chính xác. |
 | **Cơ chế Gripper** | Toggle Mode | Nhấn 1 lần nút A/X để kẹp/hút, nhấn lần nữa để thả; kèm rung Haptic. |
 | **Khởi động URSim** | Tự động qua Docker | Tự kiểm tra cổng 29999 và chạy `docker start ursim` khi chạy `127.0.0.1`. |
 | **Chuyển tiếp cổng ADB Quest** | Tự động chạy nền | Kiểm tra kết nối cáp USB mỗi 2.5s và tự động ánh xạ cổng sang `localhost`. |
