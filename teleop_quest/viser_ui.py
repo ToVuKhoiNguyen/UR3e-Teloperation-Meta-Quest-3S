@@ -41,6 +41,7 @@ class StatusProxy:
     def __init__(self, refresh_cb, initial_value=""):
         self._val = str(initial_value)
         self._refresh_cb = refresh_cb
+        self._callbacks = []
 
     @property
     def value(self):
@@ -48,12 +49,26 @@ class StatusProxy:
 
     @value.setter
     def value(self, new_val):
-        self._val = str(new_val)
+        new_val_str = str(new_val)
+        if self._val == new_val_str:
+            return  # Chống spam cập nhật Markdown WebSocket khi trạng thái không đổi
+        self._val = new_val_str
         if self._refresh_cb:
             self._refresh_cb()
+        for cb in self._callbacks:
+            try:
+                cb(self)
+            except Exception as e:
+                print(f"[StatusProxy Cảnh báo] Callback lỗi: {e}")
+
+    def on_update(self, callback):
+        """Hỗ trợ đăng ký callback event handler như một Viser GUI handle thực thụ"""
+        self._callbacks.append(callback)
+        return callback
 
     def __str__(self):
         return self._val
+
 
 
 class TargetWidgetWrapper:
