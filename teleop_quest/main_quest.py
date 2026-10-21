@@ -110,7 +110,16 @@ def register_ui_callbacks(
             t0 = time.perf_counter()
             st_val = str(ui.ui_status.value)
             if quest_server:
-                quest_server.broadcast_robot_telemetry(status=st_val)
+                cur_pos = None
+                cur_quat = None
+                try:
+                    q_c = ctrl.joints()
+                    fk_c = teleop._solver.fk(q_c)
+                    cur_pos = fk_c.get("pos")
+                    cur_quat = fk_c.get("quat")
+                except Exception:
+                    pass
+                quest_server.broadcast_robot_telemetry(pos=cur_pos, quat=cur_quat, status=st_val)
             latency_ms = (time.perf_counter() - t0) * 1000.0
             print(f"[Viser UI Event] Trạng thái Robot cập nhật: '{st_val}' (Độ trễ: {latency_ms:.2f}ms)")
 
