@@ -148,15 +148,25 @@ class QuestServer:
                 except Exception:
                     pass
 
-    def broadcast_robot_telemetry(self, pos, quat, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None):
+    def broadcast_robot_telemetry(self, pos: list = None, quat: list = None, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None):
         """Phát tọa độ TCP thực tế, quaternion và trạng thái robot + VR controller tới WebXR Cockpit HUD."""
         with self._lock:
             clients = list(self._clients)
             loop = self._loop
             latest_frame = dict(self._latest_frame) if self._latest_frame else None
+            cached_dict = getattr(self, "_latest_telemetry_dict", None)
             now = time.time()
             is_vr_connected = bool(self._connected and (now - self._last_seen < 3.0))
             drive_mode = self._drive_mode
+
+        # Kế thừa dữ liệu telemetry gần nhất nếu pos, quat hoặc joints không được truyền
+        if cached_dict:
+            if pos is None and "pos" in cached_dict:
+                pos = cached_dict["pos"]
+            if quat is None and "quat" in cached_dict:
+                quat = cached_dict["quat"]
+            if joints is None and "joints" in cached_dict:
+                joints = cached_dict["joints"]
 
         hand_name = "Waiting..."
         trigger_pressed = False
