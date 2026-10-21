@@ -243,7 +243,13 @@
 
 
         
-        btnExitVR.addEventListener('click', () => {
+        btnExitVR.addEventListener('click', (e) => {
+            if (uiLocked && xrSession) {
+                console.log("[WebXR] Bỏ qua click Exit VR vì đang ở chế độ điều khiển (drive-mode).");
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             if (xrSession) {
                 xrSession.end();
             } else {
@@ -370,6 +376,7 @@
                 if (pose) {
                     let triggerPressed = false;
                     let gripPressed = false;
+                    let thumbstickClickPressed = false;
                     let gripperRawPressed = false;
                     let gripperBtnPressed = false;
                     let btnBPressed = false;
@@ -422,8 +429,15 @@
                         gripperToggleTriggered = true;
                         gripperClosedState = !gripperClosedState;
                         console.log(`[Gripper Toggle] Chuyển trạng thái: ${gripperClosedState ? 'KẸP (CLOSED)' : 'THẢ (OPEN)'}`);
-                        if (activeSource.gamepad && activeSource.gamepad.hapticActuators && activeSource.gamepad.hapticActuators.length > 0) {
-                            activeSource.gamepad.hapticActuators[0].pulse(gripperClosedState ? 0.9 : 0.4, 120);
+                        try {
+                            if (activeSource.gamepad && activeSource.gamepad.hapticActuators && activeSource.gamepad.hapticActuators.length > 0) {
+                                let act = activeSource.gamepad.hapticActuators[0];
+                                if (typeof act.pulse === 'function') {
+                                    act.pulse(gripperClosedState ? 0.9 : 0.4, 120);
+                                }
+                            }
+                        } catch (hapticErr) {
+                            console.warn("[WebXR Haptic Warning]", hapticErr);
                         }
                     }
                     lastGripperRawPressed = gripperRawPressed;

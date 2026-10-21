@@ -461,8 +461,11 @@ class QuestServer:
                             self._record_frame(data)
                     except json.JSONDecodeError:
                         pass
-            except (websockets.exceptions.ConnectionClosed, Exception):
+            except websockets.exceptions.ConnectionClosed:
                 pass
+            except Exception as ws_err:
+                print(f"[WebXR WebSocket Error] Ngoại lệ kết nối từ {remote_ip}: {ws_err}")
+                traceback.print_exc()
             finally:
                 print(f"[WebXR WebSocket] Kính Quest đã ngắt kết nối điều khiển từ {remote_ip}")
                 with self._lock:
