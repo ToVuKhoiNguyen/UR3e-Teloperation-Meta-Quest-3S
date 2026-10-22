@@ -139,9 +139,6 @@ class CameraStreamPipeline:
                     if depth_data is not None:
                         self._latest_raw_depth = depth_data
 
-                # Đã gỡ bỏ khối Wrist Camera trên Viser UI để giải phóng băng thông CPU/Websocket
-                # if self.ui:
-                #     self.ui.update_cam_preview(preview_frame)
                 if self.quest_server:
                     self.quest_server.send_camera_frame(preview_frame)
             except Exception:

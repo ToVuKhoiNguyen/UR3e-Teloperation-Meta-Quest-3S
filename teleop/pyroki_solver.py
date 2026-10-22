@@ -26,14 +26,14 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_URDF_PATH = os.path.join(_BASE_DIR, "assets", "ur3e_custom.urdf")
 DEFAULT_SCENE_PATH = os.path.join(_BASE_DIR, "assets", "obstacle_scene.yml")
 
-# Giới hạn góc khớp an toàn cho UR3e (Radian)
+# Giới hạn góc khớp an toàn cho UR3e (Radian) - Nới lỏng để mở rộng không gian vươn xa
 UR3E_LIMITS = [
-    (-2 * math.pi, 2 * math.pi),  # shoulder_pan_joint
-    (-math.pi, 0.25),             # shoulder_lift_joint
-    (-2.80, 2.80),                # elbow_joint
-    (-2 * math.pi, 2 * math.pi),  # wrist_1_joint
-    (-2 * math.pi, 2 * math.pi),  # wrist_2_joint
-    (-4 * math.pi, 4 * math.pi),  # wrist_3_joint
+    (-math.pi, math.pi),          # shoulder_pan_joint:  [-180°, +180°]
+    (-2.65, 0.20),                # shoulder_lift_joint: [-151.8°, +11.5°] (Mở rộng góc cúi/ngửa)
+    (0.10, 2.40),                 # elbow_joint:         [+5.7°,  +137.5°] (Cho phép duỗi vươn xa mép bàn)
+    (-3.20, 0.10),                # wrist_1_joint:       [-183.3°, +5.7°] (Mở góc ngửa hạ cổ tay)
+    (-2.95, -0.20),               # wrist_2_joint:       [-169°, -11.5°]
+    (-math.pi, math.pi),          # wrist_3_joint:       [-180°, +180°]
 ]
 
 
@@ -87,7 +87,7 @@ def load_table_bounds(scene_path: Optional[str] = None) -> Dict[str, float]:
         "x_min": x_min, "x_max": x_max,
         "y_min": y_min, "y_max": y_max,
         "z_table_top": z_table_top, "z_bottom": z_bottom,
-        "z_floor": 0.0,
+        "z_floor": z_table_top,
     }
 
 
@@ -155,6 +155,21 @@ class PyrokiIKSolver:
 
         print(f"[PyRoki] Khởi tạo mô hình Robot từ URDF: {self.urdf_path}...")
         self.urdf = yourdfpy.URDF.load(self.urdf_path, load_meshes=False)
+
+        # Cập nhật limits vào mô hình URDF để pk.costs.limit_cost trong JIT IK tự động áp dụng dải an toàn
+        _actuated_joint_names = [
+            "shoulder_pan_joint",
+            "shoulder_lift_joint",
+            "elbow_joint",
+            "wrist_1_joint",
+            "wrist_2_joint",
+            "wrist_3_joint",
+        ]
+        for name, (lo, hi) in zip(_actuated_joint_names, UR3E_LIMITS):
+            if name in self.urdf.joint_map and self.urdf.joint_map[name].limit is not None:
+                self.urdf.joint_map[name].limit.lower = lo
+                self.urdf.joint_map[name].limit.upper = hi
+
         self.robot = pk.Robot.from_urdf(self.urdf)
 
         if self.tcp_link not in self.robot.links.names:
@@ -199,7 +214,7 @@ class PyrokiIKSolver:
                 joint_var=q_var,
                 target_pose=target_se3,
                 target_link_index=tcp_idx,
-                pos_weight=50.0,
+                pos_weight=60.0,
                 ori_weight=20.0
             )
             cost_limit = pk.costs.limit_cost(
@@ -218,10 +233,10 @@ class PyrokiIKSolver:
                 tcp_idx=tcp_idx,
                 cam_idx=cam_idx,
                 table_bounds=table_bounds,
-                safety_margin=0.05,
+                safety_margin=0.025,
                 cam_radius=0.035,
-                weight_floor=200.0,
-                weight_table=250.0,
+                weight_floor=150.0,
+                weight_table=120.0,
             )
             problem = jaxls.LeastSquaresProblem([cost_pose, cost_limit, cost_rest, cost_barrier], [q_var]).analyze()
             sol = problem.solve(
@@ -311,8 +326,8 @@ class PyrokiIKSolver:
 
             dt_ms = (time.perf_counter() - t0) * 1000.0
 
-            # Nếu sai số vị trí < 12mm và góc khớp hợp lệ -> nghiệm thành công
-            if pos_err < 0.012 and validate_joints(norm_q):
+            # Nếu sai số vị trí < 18mm và góc khớp hợp lệ -> nghiệm thành công
+            if pos_err < 0.018 and validate_joints(norm_q):
                 return {"q": norm_q, "latency_ms": dt_ms, "solver": "pyroki", "pos_err_mm": pos_err * 1000.0}
             else:
                 return {"q": None, "latency_ms": dt_ms, "solver": "pyroki", "pos_err_mm": pos_err * 1000.0}

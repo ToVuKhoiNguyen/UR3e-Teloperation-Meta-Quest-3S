@@ -30,14 +30,15 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
      - `pose_cost_analytic_jac`: Bám vị trí (weight 50.0) và định hướng mục tiêu (weight 20.0).
      - `limit_cost`: Ràng buộc giới hạn khớp (weight 0.5).
      - `rest_cost`: Chi phí neo giữ dáng mồi (weight 0.02) kết hợp hạt giống chuẩn `q_var.with_value(seed)` đảm bảo liên tục nghiệm giữa các frame.
-   - Chuẩn hóa giới hạn góc khớp: Khớp khuỷu (`elbow_joint`) cho phép gập sâu an toàn $[-2.80, 2.80]$ rad ($\approx \pm 160^\circ$), khớp nâng vai `shoulder_lift_joint` trong $[- \pi, 0.25]$ rad chống chúi đập bàn, các khớp cổ tay mở rộng dải quay tự nhiên.
+   - Chuẩn hóa giới hạn góc khớp: Khớp khuỷu (`elbow_joint`) trong dải an toàn $[+0.10, +2.40]$ rad ($[+5.7^\circ, +137.5^\circ]$) loại bỏ nguy cơ gập sát tự đâm vào thân robot đồng thời cho phép duỗi vươn xa mép bàn, khớp nâng vai `shoulder_lift_joint` trong $[-2.65, +0.20]$ rad chống chúi đập bàn, khớp cổ tay `wrist_1_joint` trong $[-3.20, +0.10]$ rad và `wrist_2_joint` trong $[-2.95, -0.20]$ rad chống bẻ ngược vào bắp tay.
    - Thuật toán `normalize_to_current`: Tự động tìm nghiệm góc khớp tương đương gần nhất với cấu hình hiện tại trong dải an toàn, triệt tiêu hoàn toàn hiện tượng vặn xoắn cổ tay hoặc đảo nhánh IK bất thường.
 
-3. **Luồng Stream Camera Cổ Tay Trực Tiếp (Real-time 20 FPS) & Driver Hợp Nhất:**
-   - Khung "CAMERA STREAM" trên giao diện WebXR Cockpit và sidebar Viser hiển thị trực tiếp góc nhìn từ camera cổ tay robot ở tần số thời gian thực 20 FPS.
-   - Driver camera hợp nhất (`camera_driver.py`) hỗ trợ chuyển đổi linh hoạt qua cờ dòng lệnh CLI:
+3. **Luồng Stream Camera Cổ Tay Trực Tiếp (Real-time 20 FPS) & Driver Đa Phương Thức (USB / Ethernet):**
+   - Khung "CAMERA STREAM" trên giao diện WebXR Cockpit hiển thị trực tiếp góc nhìn từ camera cổ tay robot ở tần số thời gian thực 20 FPS.
+   - Kiến trúc Driver Đa Phương Thức (`camera_driver.py`) hỗ trợ chuyển đổi linh hoạt qua cờ dòng lệnh CLI:
      - **Camera mô phỏng 3D (`SyntheticWristCamera`):** Kết xuất đồ họa màu RGB 640x480, góc nhìn Eye-in-Hand từ đầu tay máy quan sát quả cà chua và khay chứa.
-     - **Camera vật lý thật (`RealWristCamera`):** Đọc trực tiếp luồng hình ảnh từ camera Intel RealSense (D435/D455) hoặc USB webcam qua driver `camera_driver.py` (`--camera real --camera-device 0`).
+     - **Camera USB vật lý thật (`RealWristCamera`):** Đọc trực tiếp luồng hình ảnh từ camera Intel RealSense (D435/D455) hoặc USB webcam cắm trực tiếp vào máy chủ (`--cam-source usb`).
+     - **Camera qua cáp mạng Ethernet (`EthernetWristCamera`):** Nhận stream qua socket ZMQ Zero-lag (chế độ `CONFLATE=1`) hoặc HTTP stream từ máy tính nhúng gắn trên robot (`--cam-source eth --cam-url tcp://192.168.1.100:5555`).
    - Tích hợp mô hình ngàm kẹp + camera thực tế (`robot_camera_mount_1.stl`, `d455.stl`).
    - Tự động tích hợp thông tin trạng thái OSD (trạng thái ngàm kẹp Gripper) và truyền đồng thời qua kênh WebSocket và MJPEG `/video_feed`.
 
@@ -256,6 +257,10 @@ ur_ws/pyroki_ursim/
 │   ├── data_logger.py               # Module ghi Demonstration HDF5 ở tần số 20Hz
 │   ├── verify_dataset.py            # Công cụ kiểm tra chất lượng tập dữ liệu HDF5
 │   └── replay_episode.py            # Công cụ tái hiện quỹ đạo thao tác
+├── logs/
+│   ├── quest_runs/                  # Lưu vết dữ liệu viễn thao Meta Quest (.jsonl)
+│   ├── ai_training_data/            # Dữ liệu thao tác HDF5 thu thập phục vụ huấn luyện AI
+│   └── singularity_data/            # Dữ liệu ma trận suy biến Jacobian
 ├── safety/
 │   ├── __init__.py                  # Export SingularityGuard
 │   └── singularity_guard/
@@ -264,13 +269,14 @@ ur_ws/pyroki_ursim/
 │       └── calibration.py           # Cân chỉnh ngưỡng kỳ dị theo không gian làm việc
 ├── teleop/
 │   ├── __init__.py                  # Khởi tạo module teleop
-│   ├── pyroki_solver.py             # Bộ giải PyrokiIKSolver (JAX JIT CPU, ~1ms, rest_cost)
+│   ├── pyroki_solver.py             # Bộ giải PyrokiIKSolver (JAX JIT CPU, ~1ms, rest_cost, UR3E_LIMITS)
 │   └── teleoperation.py             # TeleoperationController, ServoJExecutor, SafetyGate
 ├── teleop_quest/
 │   ├── __init__.py                  # Xuất khẩu các lớp và hàm chính của package
 │   ├── bootstrap.py                 # Khởi tạo Docker URSim, ADB watcher, config & SSL
 │   ├── camera_pipeline.py           # Quản lý luồng nền camera, preview OSD & streaming
-│   ├── camera_driver.py             # Driver camera cổ tay hợp nhất: Ảo 3D & RealSense thật
+│   ├── camera_driver.py             # Driver camera cổ tay hợp nhất: Ảo 3D, RealSense USB & Ethernet
+│   ├── camera_server_node.py        # Node phát stream video camera qua mạng Ethernet (ZMQ / HTTP)
 │   ├── synthetic_camera.py          # Render camera ảo cổ tay 640x480 (Eye-in-Hand)
 │   ├── viser_ui.py                  # Giao diện Viser 3D Cockpit và bảng điều khiển 2x2
 │   ├── grasp_simulator.py           # Mô phỏng gắp/thả quả cà chua 3D vào giỏ
@@ -288,8 +294,15 @@ ur_ws/pyroki_ursim/
 └── tests/
     ├── test_camera.py               # Kiểm thử render camera ảo ở các góc nhìn & giao diện GUI
     ├── test_realsense.py            # Kiểm thử kết nối và đọc luồng ảnh camera Intel RealSense
+    ├── test_dual_camera.py          # Kiểm thử hệ thống camera đa phương thức (USB & Ethernet)
+    ├── test_joint_limits.py         # Kiểm thử các rào chắn giới hạn góc khớp và chống tự va chạm
+    ├── test_multi_layer_safety.py   # Kiểm thử chuỗi bảo vệ an toàn đa lớp
     ├── test_simulated_pick_and_place.py # Kiểm thử tự động pick-place cà chua và xuất HDF5
-    └── test_singularity_guard.py    # Kiểm thử tính toán Jacobian singularity metric (sigma_min)
+    ├── test_singularity_guard.py    # Kiểm thử tính toán Jacobian singularity metric (sigma_min)
+    ├── test_3d_hud.py               # Kiểm thử giao diện tương tác HUD tay cầm 3D
+    ├── test_viser_ui_layout.py      # Kiểm thử bố cục điều khiển Viser UI
+    ├── test_wrist_cam_removal.py    # Kiểm tra giải phóng tài nguyên luồng camera cổ tay Viser
+    └── test_cockpit_launcher_bypass.py # Kiểm tra cơ chế bypass màn hình khởi chạy Cockpit
 ```
 
 ---
@@ -304,20 +317,33 @@ cd /home/nguyen/ur_ws/pyroki_ursim
 source .venv/bin/activate
 
 # 1. Chạy với URSim mô phỏng (Camera ảo 3D - Mặc định, tự động kích hoạt Docker URSim):
-python3 main.py
+python main.py
 
-# 2. Chạy với Robot UR3e thật:
-python3 main.py --robot-ip 10.42.0.242
+# 2. Chạy với Robot UR3e thật (Sử dụng Camera ảo 3D):
+python main.py --robot-ip 10.42.0.242
 
-# 3. Chạy với Robot UR3e thật kèm Camera vật lý (Intel RealSense / USB Webcam):
-python3 main.py --robot-ip 10.42.0.242 --camera real --camera-device 0
+# 3. Chạy kiểm tra độc lập Camera Intel RealSense D455/D435 (không cần bật Robot):
+python tests/test_realsense.py --gui     # Cửa sổ trực quan live stream
+
+# 4. Chạy CẢ HAI: Robot UR3e thật + Camera Intel RealSense cắm USB thật (Chuẩn thực tế):
+python main.py --robot-ip 10.42.0.242 --cam-source usb --camera realsense
+
+# 5. Chạy CẢ HAI: Robot UR3e thật + Camera qua cáp mạng Ethernet (ZMQ Zero-lag):
+# (Phía máy nhúng gắn camera chạy: python teleop_quest/camera_server_node.py --port 5555)
+python main.py --robot-ip 10.42.0.242 --cam-source eth --cam-url tcp://192.168.1.100:5555
+
+# 6. Chạy CẢ HAI kèm Ghi dữ liệu Huấn luyện AI (JSONL Record):
+python main.py --robot-ip 10.42.0.242 --camera realsense --record logs/quest_runs/episode_real_01.jsonl
 ```
 
 Các tham số dòng lệnh được hỗ trợ:
 - `--robot-ip`: Địa chỉ IP của Robot thật hoặc URSim (ví dụ: `10.42.0.242`, mặc định: `127.0.0.1`).
-- `--camera`: Nguồn camera cổ tay: `synthetic` (mô phỏng) hoặc `real` (camera thật) (mặc định: `synthetic`).
-- `--camera-device`: Chỉ số Device ID của camera thật (mặc định: `0`).
-- `--camera-serial`: Serial number chỉ định khi dùng nhiều camera RealSense.
+- `--cam-source`: Phương thức kết nối camera: `usb` (cắm cáp USB trực tiếp vào máy chủ) hoặc `eth` (truyền qua cáp mạng Ethernet ZMQ Zero-lag / HTTP) (mặc định: `usb`).
+- `--cam-url`: Địa chỉ ZMQ endpoint hoặc HTTP URL khi sử dụng camera qua Ethernet (mặc định: `tcp://192.168.1.100:5555`).
+- `--camera`: Nguồn camera cổ tay khi chạy USB: `realsense` (Intel RealSense SDK D455/D435 - Khuyến nghị), `real` (OpenCV V4L2), hoặc `synthetic` (mô phỏng 3D) (mặc định: `synthetic`).
+- `--camera-device`: Chỉ số Device ID của camera thật V4L2 (mặc định: `0` tương ứng `/dev/video0`).
+- `--camera-serial`: Serial number chỉ định khi máy cắm nhiều camera Intel RealSense.
+- `--record <tên_file.jsonl>`: Tự động ghi log toàn bộ gói tin thô VR Teleop và telemetry robot ra file JSONL (khuyến nghị lưu vào thư mục `logs/quest_runs/`).
 
 Hệ thống sẽ hiển thị các cổng truy cập:
 - Viser Dashboard: `http://localhost:8080`
@@ -441,22 +467,66 @@ Mô hình tay cầm VR hoạt động như một bản sao kỹ thuật số (Di
 ## 6. Hướng Dẫn Triển Khai Trên Cánh Tay Robot UR3e Thực Tế
 
 ### 6.1. Kết Nối Phần Cứng & Cấu Hình Mạng LAN
-1. **Cắm cáp mạng LAN:** Kết nối trực tiếp từ cổng mạng của máy tính (PC chạy code) vào cổng mạng trên hộp điều khiển UR Control Box (hoặc qua Switch mạng nội bộ).
-2. **Cài đặt IP tĩnh trên Robot (qua màn hình Teach Pendant - PolyScope):**
+
+Cắm cáp mạng Ethernet trực tiếp từ cổng mạng của máy tính (PC) vào cổng mạng trên hộp điều khiển UR Control Box (hoặc qua Switch / Router mạng nội bộ).
+
+#### Lựa chọn 1: Cấu hình tự động qua DHCP (Khuyên dùng khi cắm qua Router phòng Lab hoặc mạng chia sẻ)
+1. Trên màn hình PolyScope Teach Pendant: Vào **Settings** -> **System** -> **Network**.
+2. Chọn **DHCP** -> Bấm **Apply**.
+3. Chờ 3 – 5 giây để trạng thái chuyển sang màu xanh lá: **`Network is connected`**.
+4. Ghi lại địa chỉ IP hiển thị trên màn hình PolyScope (ví dụ: `10.35.44.150` hoặc `192.168.1.xxx`).
+5. Trên máy tính điều khiển PC, kiểm tra kết nối với IP vừa nhận:
+   ```bash
+   ping -c 3 <IP_ROBOT>
+   nc -zv <IP_ROBOT> 29999 30002 30004
+   ```
+> **Mẹo khi cắm cáp trực tiếp PC <-> Robot không qua Router:** Trên Ubuntu PC, vào **Settings** -> **Network** -> **Wired** (bấm bánh răng cài đặt) -> Tab **IPv4** -> Chọn **"Shared to other computers"** -> Bấm **Apply**. Lúc này Ubuntu PC sẽ tự phát DHCP dải `10.42.0.x` cho Robot, Robot chọn DHCP sẽ lập tức kết nối thành công và nhận IP `10.42.0.xxx`!
+
+#### Lựa chọn 2: Cài đặt IP Tĩnh (Static IP: 10.42.0.242)
+1. **Trên màn hình PolyScope Teach Pendant:**
    - Vào menu: **Settings** -> **System** -> **Network**.
    - Chọn **Static Address**:
-     - IP Address: ví dụ `192.168.1.100` (hoặc `10.42.0.242`)
+     - IP Address: `10.42.0.242`
      - Subnet Mask: `255.255.255.0`
-     - Default Gateway: `192.168.1.1`
-   - Bấm **Apply** và xác nhận trạng thái mạng hiển thị *Network is connected*.
-3. **Cài đặt IP trên máy tính điều khiển (PC):**
-   - Cài đặt IP máy tính cùng dải mạng: ví dụ `192.168.1.50`, Subnet Mask `255.255.255.0`.
-   - Kiểm tra kết nối mạng và kiểm tra mở 3 cổng dịch vụ cốt lõi của URControl:
-     ```bash
-     ping -c 3 192.168.1.100
-     # Quét 3 cổng dịch vụ: 29999 (Dashboard), 30002 (URScript Primary), 30004 (RTDE)
-     nc -zv 192.168.1.100 29999 30002 30004
-     ```
+     - Default Gateway: `10.42.0.1`
+   - Bấm **Apply** và xác nhận dòng trạng thái hiển thị: *Network is connected*.
+   > **Xử lý lỗi "Not connected to network":** Nếu PolyScope báo *Not connected*, nguyên nhân là do máy tính PC chưa đặt IP tĩnh cùng dải `10.42.0.1` nên Robot không ping thấy Gateway. Hãy thực hiện bước cài đặt trên PC dưới đây để thông mạng.
+2. **Cài đặt IP trên máy tính điều khiển (PC) qua Củ Chuyển USB-to-Ethernet Adapter:**
+
+> **Lưu ý phần cứng:** Luôn cắm adapter USB-to-Ethernet vào cổng **USB 3.0** (chân cắm màu xanh dương hoặc có ký hiệu `SS`). Tránh cắm qua hub USB chia nhiều cổng không có nguồn phụ để tránh chập chờn điện áp gây ngắt kết nối RTDE.
+
+Khi cắm củ chuyển USB-to-Ethernet vào máy tính chạy Ubuntu, hệ điều hành sẽ tự nhận một giao diện mạng mới (thường có tên dạng `enx<MAC_ADDRESS>` như `enx00e04c680001` hoặc `eth1`). Người vận hành thực hiện cấu hình IP tĩnh theo 1 trong 2 cách sau:
+
+##### Cách A: Cấu hình nhanh bằng Giao diện Đồ họa Ubuntu (Khuyến nghị - 30 giây)
+1. Mở **Settings** -> **Network**.
+2. Tại mục kết nối có dây mới xuất hiện (**Wired / USB Ethernet**), bấm vào biểu tượng bánh răng cài đặt.
+3. Chuyển sang tab **IPv4**:
+   - Chọn chế độ: **Manual**
+   - **Address:** `10.42.0.1` (hoặc `10.42.0.50`)
+   - **Netmask:** `255.255.255.0`
+   - **Gateway:** `10.42.0.1` *(hoặc để trống nếu chỉ kết nối mạng nội bộ riêng với Robot)*
+4. Bấm **Apply**, sau đó gạt công tắc Wired Tắt rồi Bật lại để hệ thống kích hoạt IP mới.
+
+##### Cách B: Cấu hình nhanh bằng Dòng lệnh CLI (`nmcli`)
+```bash
+# Bước 1: Quét danh sách thiết bị để tìm tên card mạng USB (dạng enx... hoặc eth...):
+nmcli device status
+
+# Bước 2: Tạo hoặc gán IP tĩnh 10.42.0.1/24 cho card mạng USB (thay <TÊN_CARD_USB> bằng tên thực tế):
+sudo nmcli con add type ethernet con-name "USB-Robot-LAN" ifname <TÊN_CARD_USB> ip4 10.42.0.1/24
+
+# Bước 3: Kích hoạt kết nối:
+sudo nmcli con up "USB-Robot-LAN"
+```
+
+##### Bước kiểm tra thông link từ máy tính sang Robot:
+```bash
+# Kiểm tra ping trực tiếp sang Robot:
+ping -c 3 10.42.0.242
+
+# Quét 3 cổng dịch vụ cốt lõi của URControl: 29999 (Dashboard), 30002 (Primary), 30004 (RTDE):
+nc -zv 10.42.0.242 29999 30002 30004
+```
 
 ### 6.2. Cấu Hình URCap & Tương Thích Thanh Ghi Fieldbus
 1. **Cài đặt URCap (Tùy chọn thiết bị ngoại vi):**
@@ -467,51 +537,261 @@ Mô hình tay cầm VR hoạt động như một bản sao kỹ thuật số (Di
    - **Cách xử lý trên Teach Pendant:** Nếu không sử dụng PLC ngoại vi, hãy tắt dải truyền thông công nghiệp tại: **Installation** -> **Fieldbus** -> **Profinet / EtherNet-IP** -> Bỏ chọn *Enable*.
    - **Cơ chế tự động của hệ thống:** Module `ServoJExecutor` tự động gửi tín hiệu `stop\n` tới Dashboard Server (Port 29999) trước khi bắt tay kết nối, đồng thời tự động kích hoạt cờ fallback `FLAG_UPPER_RANGE_REGISTERS` (chuyển sang dải thanh ghi trên 24-47) giúp hệ thống kết nối song song trơn tru mà không xung đột với URCap khác.
 
-### 6.3. Thiết Lập 5 Bước An Toàn Trên Tay Dạy PolyScope (Teach Pendant)
-1. **Bước 1: Cấp quyền và kích hoạt Remote Control (Bắt buộc cho kênh RTDE Control):**
-   - Vào **Settings** -> **System** -> **Remote Control** -> Chọn **Enable**.
-   - Quan sát góc trên cùng bên phải màn hình PolyScope (cạnh đồng hồ), nhấn vào biểu tượng tay dạy đang hiển thị **Local** và chuyển sang **Remote Control** (biểu tượng chuyển sang hình mạng máy tính).
-   *(Nếu bỏ qua bước này, URControl sẽ chặn socket ghi lệnh và báo lỗi: `Please enable remote control on the robot!`)*.
-2. **Bước 2: Cấu hình Ranh giới An toàn & Mặt phẳng Chống va chạm (Safety Limits & Boundaries):**
-   - Vào **Installation** -> **Safety** -> **Robot Limits**: Thiết lập giới hạn tốc độ đầu công cụ (TCP Speed Limit) $\le 250$ mm/s cho chế độ cộng tác an toàn ban đầu.
-   - Vào **Installation** -> **Safety** -> **Planes**: Thiết lập mặt phẳng an toàn bàn máy (*Restrict Plane*) cách mặt bàn vật lý $\ge 2$ cm. Tính năng an toàn phần cứng của URControl sẽ tự động ngắt dừng cánh tay nếu quỹ đạo điều khiển có nguy cơ va quẹt mặt bàn.
-3. **Bước 3: Khai báo Tải trọng Đầu Gắp (Payload), Trọng tâm (CoG) & Tọa độ TCP:**
-   - Vào **Installation** -> **General** -> **Payload & TCP**: Cài đặt chính xác khối lượng cụm ngàm gắp + camera + giá đỡ in 3D (ví dụ Robotiq 2F-85 + Intel RealSense D435 $\approx 1.1$ kg) và tọa độ trọng tâm CoG.
-   *(Tránh hiện tượng bù sai trọng trường dẫn đến rung giật cánh tay hoặc kích hoạt lỗi `Protective Stop: Position deviation`)*.
-4. **Bước 4: Đưa Robot về Tư thế Sẵn sàng Ban đầu (Ready Pose) Chống Kẹt Kỳ Dị (Singularity Trap):**
-   - Tại màn hình PolyScope (khi đang ở Local Mode), mở tab **Move** và điều khiển các khớp về cấu hình gập khuỷu tự nhiên, ví dụ:
-     - Khớp 1 (Base): $0^\circ$ (`0.0` rad)
-     - Khớp 2 (Shoulder): $-126^\circ$ (`-2.2` rad)
-     - Khớp 3 (Elbow): $+109^\circ$ (`+1.9` rad)
-     - Khớp 4 (Wrist 1): $-90^\circ$ (`-1.57` rad)
-     - Khớp 5 (Wrist 2): $-90^\circ$ (`-1.57` rad)
-     - Khớp 6 (Wrist 3): $0^\circ$ (`0.0` rad)
-   - **Lưu ý đặc biệt:** Tuyệt đối không để cổ tay duỗi thẳng hàng ($q_5 \approx 0^\circ$). Tránh tình trạng giá trị suy biến nhỏ nhất $\sigma_{min} < 0.035$ khiến lớp bảo vệ `SafetyGate` cự tuyệt lệnh và kích hoạt vòng lặp `Auto-Snap` liên tục ngay khi vừa khởi chạy.
-5. **Bước 5: Bật Nguồn, Nhả Phanh và Giới hạn Tốc độ Ban đầu:**
-   - Nhấp vào nút trạng thái robot ở góc dưới cùng bên trái màn hình: bấm **Power On** -> bấm **Release Brakes** (Đèn trạng thái chuyển sang màu xanh lá `RUNNING`).
-   - Kéo thanh trượt tốc độ (**Speed Slider**) ở chân màn hình PolyScope xuống mức **10% – 20%** để giám sát trực quan phản hồi trong những thao tác đầu tiên.
-   - Người giám sát luôn cầm sẵn Teach Pendant trên tay, ngón tay đặt tại nút Dừng khẩn cấp (**Emergency Stop**) màu đỏ để chủ động can thiệp.
+### 6.3. Quy Trình Cấu Hình Chi Tiết Trên Tay Dạy PolyScope (Teach Pendant e-Series)
 
-### 6.4. Khởi Chạy Với Robot Thật
-Khởi chạy hệ thống bằng lệnh (truyền trực tiếp địa chỉ IP mạng LAN của robot):
+Quy trình 10 bước chuẩn hóa từ A-Z khi đứng trước cánh tay robot thật UR3e:
+
+#### Bước 1: Khởi Động Nguồn Control Box & Nạp Giao Diện PolyScope
+- Bật công tắc nguồn cơ học trên mặt trước của tủ điều khiển UR Control Box.
+- Chờ màn hình cảm ứng Teach Pendant khởi động và tải hoàn tất hệ điều hành PolyScope 5.
+
+#### Bước 2: Thiết Lập Mạng LAN (Network Setup)
+- Mở menu chính (biểu tượng 3 gạch góc trên bên phải) -> **Settings** -> **System** -> **Network**.
+- Lựa chọn phương thức kết nối:
+  - **Cách A (DHCP):** Chọn **DHCP** -> Bấm **Apply**. Đợi quả cầu mạng chuyển màu xanh lá *Network is connected* và đọc địa chỉ IP hiển thị.
+  - **Cách B (Static IP):** Chọn **Static Address** -> Nhập IP `10.42.0.242`, Subnet `255.255.255.0`, Gateway `10.42.0.1` -> Bấm **Apply**.
+
+#### Bước 3: Cấp Quyền & Kích Hoạt Remote Control (Bắt buộc cho kênh RTDE Control)
+- Vào **Settings** -> **System** -> **Remote Control** -> Chọn **Enable**.
+- Quan sát thanh tiêu đề header trên cùng (cạnh đồng hồ), nhấn vào biểu tượng chế độ điều khiển đang ở chữ **Local** -> Chọn chuyển sang **Remote Control**.
+- Biểu tượng sẽ chuyển từ hình tay dạy sang **hình mạng máy tính**.
+*(Lưu ý: Nếu không chuyển sang Remote Control, URControl sẽ chặn socket ghi lệnh qua RTDE và bắn lỗi `Please enable remote control on the robot!`)*.
+
+#### Bước 4: Khai Báo Đầu Công Cụ (TCP), Tải Trọng (Payload) & Trọng Tâm (CoG)
+*(Bước bắt buộc để tránh hiện tượng rung lắc cánh tay hoặc kích hoạt lỗi `Protective Stop: Position deviation`)*:
+- Mở tab **Installation** -> **General** -> **TCP**:
+  - Chọn TCP làm việc, khai báo vị trí đầu gắp: nếu lắp ngàm Robotiq 2F-85 và mount camera RealSense, offset trục $Z \approx 135\text{ mm}$ ($0.135\text{ m}$), $X = 0$, $Y = 0$.
+- Mở tab **Installation** -> **General** -> **Payload**:
+  - Khai báo tổng khối lượng đầu công cụ: $\approx 1.1\text{ kg}$ (gồm ngàm gắp + camera Intel RealSense D455/D435 + bracket mount).
+  - Khai báo trọng tâm CoG: $Cx = 0\text{ mm}$, $Cy = 0\text{ mm}$, $Cz \approx 45\text{ mm}$.
+- Nhấn **Save** để lưu file cấu hình cài đặt (`default.installation`).
+
+#### Bước 5: Cấu Hình Ranh Giới An Toàn Phần Cứng (Safety Limits & Boundaries)
+- Mở tab **Installation** -> **Safety** -> Nhập mật khẩu Safety (mặc định của UR là `easybot` nếu chưa thay đổi).
+- Vào mục **Robot Limits**: Thiết lập giới hạn tốc độ đầu công cụ (TCP Speed Limit) $\le 250\text{ mm/s}$ cho chế độ thử nghiệm ban đầu.
+- Vào mục **Planes**: Thêm một mặt phẳng hạn chế (*Restrict Plane*) mô phỏng mặt bàn thao tác, đặt cách mặt bàn vật lý $\ge 2\text{ cm}$ về phía trên. Bộ điều khiển an toàn phần cứng URControl sẽ cưỡng chế dừng cánh tay nếu quỹ đạo điều khiển có nguy cơ va quẹt mặt bàn.
+- Nhấn nút **Apply & Restart** cấu hình an toàn.
+
+#### Bước 6: Tắt Xung Đột Truyền Thông Công Nghiệp Fieldbus
+- Mở tab **Installation** -> **Fieldbus**:
+  - Chọn **Profinet** -> Bỏ tick chọn **Enable**.
+  - Chọn **EtherNet/IP** -> Bỏ tick chọn **Enable**.
+- *Mục đích:* Giải phóng dải thanh ghi số nguyên đầu vào RTDE (`input_int_register[0..23]`) khỏi sự chiếm dụng ngầm của các giao thức công nghiệp khi không sử dụng PLC ngoại vi.
+
+#### Bước 7: Bật Nguồn Động Cơ Khớp & Nhả Phanh Cơ Học
+- Nhìn góc dưới cùng bên trái màn hình PolyScope, nhấn vào nút trạng thái robot đang hiển thị màu đỏ (**Power Off**):
+  1. Nhấn nút **ON** (Đèn trạng thái chuyển sang màu vàng - **Idle**).
+  2. Nhấn nút **START / RELEASE BRAKES** (Lắng nghe các tiếng lách tách nhả phanh cơ học tại 6 khớp động cơ, đèn trạng thái chuyển sang màu xanh lá cây - **RUNNING / NORMAL**).
+- Đóng cửa sổ điều khiển nguồn.
+
+#### Bước 8: Đưa Cánh Tay về Tư Thế Khởi Đầu An Toàn (Ready Pose) Chống Kẹt Kỳ Dị
+*(Thao tác khi robot đang ở Local mode trước khi chuyển sang Remote mode, hoặc dùng nút Freedrive)*:
+- Nhấn giữ nút **Freedrive** (nút màu đen lớn ở mặt sau tay dạy Teach Pendant) để dắt tay robot, hoặc mở tab **Move** để nhập trực tiếp góc 6 khớp:
+  - Khớp 1 (Base): $0.0^\circ$ (`0.00` rad)
+  - Khớp 2 (Shoulder): $-126.0^\circ$ (`-2.20` rad)
+  - Khớp 3 (Elbow): $+109.0^\circ$ (`+1.90` rad)
+  - Khớp 4 (Wrist 1): $-90.0^\circ$ (`-1.57` rad)
+  - Khớp 5 (Wrist 2): $-90.0^\circ$ (`-1.57` rad)
+  - Khớp 6 (Wrist 3): $0.0^\circ$ (`0.00` rad)
+- **Lưu ý sống còn:** Tuyệt đối tránh tư thế duỗi thẳng cánh tay hoặc để khớp cổ tay số 5 $q_5 = 0^\circ$ (kỳ dị cổ tay Wrist Singularity khiến giá trị suy biến $\sigma_{min} < 0.035$ và kích hoạt vòng lặp Auto-Snap liên tục).
+
+#### Bước 9: Hạ Tốc Độ Thử Nghiệm & Sẵn Sàng Tay Cầm E-Stop
+- Kéo thanh trượt tốc độ (**Speed Slider**) ở cạnh dưới cùng màn hình PolyScope xuống mức **10% – 20%** trong lần vận hành đầu tiên. Khi hệ thống đã bám tracking ổn định mới từ từ đẩy lên $50\% - 100\%$.
+- Người vận hành luôn cầm chắc Teach Pendant trên tay, ngón tay cái đặt hờ trên nút nấm đỏ **Emergency Stop** để có thể bấm ngắt nguồn tức thì nếu xảy ra sự cố bất ngờ.
+
+#### Bước 10: Xử Lý Khôi Phục Khi Gặp Lỗi Protective Stop (Recovery Guide)
+Nếu có va chạm nhẹ hoặc gia tốc tăng đột ngột, URControl sẽ vào trạng thái **Protective Stop** (màu vàng cam):
+- **Cách 1 (Trực tiếp trên Teach Pendant):** Nhấn nút **Unlock Protective Stop** màu vàng hiển thị trên màn hình. Robot sẽ kiểm tra trạng thái tĩnh trong 3-5 giây và tự động khôi phục về trạng thái xanh **RUNNING**.
+- **Cách 2 (Mở khóa từ PC qua cổng Dashboard 29999):**
+  ```bash
+  echo -e "unlock protective stop\nclose safety popup\n" | nc -w 1 10.42.0.242 29999
+  ```
+- Sau khi mở khóa, chạy lại lệnh vận hành tương ứng từ máy tính.
+
+---
+
+#### Bảng Checklist 10 Điểm Trước Khi Khởi Chạy Code Teleop
+| STT | Hạng mục kiểm tra | Trạng thái đạt yêu cầu | Ghi chú |
+| :---: | :--- | :---: | :--- |
+| 1 | Cáp mạng LAN | Đã cắm chắc chắn | Cáp Cat5e/Cat6 từ PC tới Control Box |
+| 2 | Trạng thái Mạng | `Network is connected` | Đèn xanh lá trong Settings -> Network |
+| 3 | Chế độ Điều khiển | `Remote Control` | Icon mạng trên thanh header PolyScope |
+| 4 | Cấu hình Payload | Đã nhập đúng kg & CoG | Tránh lỗi lệch vị trí Protective Stop |
+| 5 | Ranh giới An toàn | Plane $\ge 2\text{ cm}$ | Chống cánh tay va quẹt mặt bàn |
+| 6 | Fieldbus | Đã tắt Profinet / EtherNet-IP | Tránh xung đột thanh ghi RTDE |
+| 7 | Trạng thái Nguồn | `RUNNING` (Xanh lá) | Đã bấm On và Release Brakes |
+| 8 | Tư thế Khởi đầu | Khuỷu gập tự nhiên | $q_1 \approx -126^\circ, q_2 \approx +109^\circ, q_4 \approx -90^\circ$ |
+| 9 | Thanh Tốc Độ | Đặt mức $10\% - 20\%$ | Cho lần chạy thử nghiệm ban đầu |
+| 10 | An Toàn Con Người | Cầm sẵn nút Emergency Stop | Quan sát không gian xung quanh cánh tay |
+
+### 6.4. Hướng Dẫn Cấu Hình & Kiểm Tra Camera Vật Lý Độc Lập
+
+Trước khi khởi chạy toàn bộ hệ thống điều khiển robot, bạn nên kiểm tra độc lập phần cứng camera để đảm bảo luồng hình ảnh đạt độ phân giải (640x480), tốc độ (30 FPS) và độ trễ thấp (< 35ms).
+
+#### 1. Kiểm tra nhận diện phần cứng trên Linux (USB & Video Devices)
+```bash
+# A. Quét các thiết bị USB đang kết nối (tìm dòng Intel RealSense hoặc USB Camera):
+lsusb
+
+# B. Kiểm tra danh sách cổng video V4L2 có sẵn trong hệ thống:
+ls -la /dev/video*
+# hoặc dùng v4l2-ctl nếu đã cài v4l-utils (sudo apt install -y v4l-utils):
+v4l2-ctl --list-devices
+
+# C. Kiểm tra thiết bị Intel RealSense qua SDK chính hãng:
+rs-enumerate-devices --short
+```
+
+> **Lưu ý về cổng USB 3.0:** Camera Intel RealSense D455/D435 đòi hỏi băng thông cao. Luôn cắm vào cổng **USB 3.0/3.1** (chân cắm màu xanh dương hoặc có ký hiệu `SS` - SuperSpeed). Nếu cắm nhầm cổng USB 2.0, camera sẽ bị giới hạn FPS hoặc không thể mở đồng thời RGB và Depth.
+
+#### 2. Lệnh kiểm tra độc lập Camera Intel RealSense (D455 / D435 / D405)
+Hệ thống tích hợp sẵn script kiểm định tự động toàn diện kiểm tra USB speed, FPS, độ trễ và nén JPEG mô phỏng WebXR:
 ```bash
 cd /home/nguyen/ur_ws/pyroki_ursim
 source .venv/bin/activate
 
-# 1. Chạy với Robot UR3e thật (Camera mô phỏng 3D Eye-in-Hand):
-python3 main.py --robot-ip 192.168.1.100
+# A. Chế độ kiểm tra nhanh tự động (chạy 3 giây benchmark và lưu ảnh snapshot vào logs/):
+python tests/test_realsense.py
 
-# 2. Chạy với Robot UR3e thật kèm Camera vật lý (Intel RealSense D435/D455 hoặc USB Webcam):
-python3 main.py --robot-ip 192.168.1.100 --camera real --camera-device 0
+# B. Chế độ mở cửa sổ OpenCV GUI trực tiếp trên màn hình:
+python tests/test_realsense.py --gui
+
+# C. Kiểm tra hệ thống Camera đa phương thức (USB & Ethernet):
+python tests/test_dual_camera.py
+
+# D. Tùy chỉnh thông số kiểm tra:
+python tests/test_realsense.py --width 640 --height 480 --fps 30 --duration 5.0 --gui
+```
+Ảnh snapshot kiểm tra chất lượng sẽ được tự động lưu tại: `logs/test_realsense_d455.jpg` (hoặc `logs/test_d455_rgb.jpg`).
+
+#### 3. Lệnh kiểm tra độc lập USB Webcam / Camera V4L2 thông thường
+Nếu sử dụng USB Webcam thông thường hoặc camera công nghiệp giao tiếp V4L2:
+```bash
+# Kiểm tra nhanh 1 frame qua OpenCV:
+python -c "
+import cv2
+cap = cv2.VideoCapture(0)
+ret, frame = cap.read()
+if ret:
+    print('-> Camera V4L2 hoạt động tốt! Độ phân giải:', frame.shape)
+    cv2.imwrite('logs/test_usb_cam.jpg', frame)
+else:
+    print('-> LỖI: Không thể đọc frame từ /dev/video0')
+cap.release()
+"
 ```
 
-**Dấu hiệu nhận biết kết nối phần cứng thành công trên Terminal:**
+#### 4. Lệnh kiểm tra Camera ảo 3D mô phỏng (Synthetic Wrist Camera)
+Khi không có phần cứng camera thật, hệ thống hỗ trợ camera ảo 3D mô phỏng góc nhìn cổ tay Eye-in-Hand:
+```bash
+# Kiểm tra render 4 góc độ và lưu ảnh vào logs/:
+python tests/test_camera.py
+
+# Hoặc mở giao diện Web GUI tương tác trực quan (Cổng 8089):
+python tests/test_camera.py --gui
+```
+
+---
+
+### 6.5. Tổng Hợp Các Lệnh Vận Hành Thực Tế (Robot Thật & Camera Thật)
+
+Tùy theo cấu hình phần cứng sẵn có tại nơi làm việc, bạn lựa chọn lệnh chạy tương ứng:
+
+#### Trường hợp 1: Chạy CẢ HAI: Robot thật + Camera Intel RealSense (D455 / D435) [Khuyến nghị chuẩn]
+Lệnh vận hành tiêu chuẩn cho toàn bộ hệ thống viễn thao Teleop đầy đủ:
+```bash
+cd /home/nguyen/ur_ws/pyroki_ursim
+source .venv/bin/activate
+
+# Tự động nhận diện camera Intel RealSense đầu tiên:
+python main.py --robot-ip 10.42.0.242 --camera realsense
+
+# Hoặc chỉ định rõ số Serial nếu máy tính cắm nhiều camera RealSense:
+python main.py --robot-ip 10.42.0.242 --camera realsense --camera-serial 146322076196
+```
+
+#### Trường hợp 2: Chạy CẢ HAI qua Biến Môi Trường (Ngắn gọn)
+```bash
+export ROBOT_IP=10.42.0.242
+python main.py --camera realsense
+```
+
+#### Trường hợp 3: Chạy CẢ HAI kèm Thu thập Dữ liệu Huấn luyện AI (Data Logging JSONL)
+Tự động ghi lại toàn bộ chuỗi cử động tay VR Quest, góc 6 khớp robot, tọa độ TCP và trạng thái hút kẹp:
+```bash
+python main.py --robot-ip 10.42.0.242 --camera realsense --record logs/quest_runs/episode_real_01.jsonl
+```
+
+#### Trường hợp 4: Chạy kiểm tra độc lập Camera RealSense (Không cần bật Robot)
+Phù hợp khi tinh chỉnh góc nhìn camera, ánh sáng hoặc gắn ngàm gắp:
+```bash
+python tests/test_realsense.py --gui
+# hoặc kiểm tra kết nối Camera đa phương thức (USB & Ethernet):
+python tests/test_dual_camera.py
+```
+
+#### Trường hợp 5: Chạy Robot thật độc lập (Sử dụng Camera mô phỏng 3D)
+Phù hợp khi cần kiểm tra tay máy di chuyển trước hoặc chưa lắp camera lên cổ tay:
+```bash
+python main.py --robot-ip 10.42.0.242
+```
+
+#### Trường hợp 6: Chạy CẢ HAI với USB Webcam thông thường (OpenCV V4L2)
+```bash
+# Mặc định sử dụng /dev/video0:
+python main.py --robot-ip 10.42.0.242 --camera real --camera-device 0
+```
+
+---
+
+### 6.6. Bảng Tham Số Dòng Lệnh Đầy Đủ (CLI Options Reference)
+
+| Cờ lệnh (Flag) | Kiểu dữ liệu | Giá trị mặc định | Mô tả chi tiết & Ví dụ |
+| :--- | :---: | :---: | :--- |
+| `--robot-ip` | `string` | `127.0.0.1` | Địa chỉ IP của Robot thật hoặc URSim. Nếu khác `127.0.0.1`, hệ thống bỏ qua Docker URSim và kết nối trực tiếp cổng RTDE 30003/30004 của robot thật. <br>Ví dụ: `--robot-ip 10.42.0.242` |
+| `--camera` | `string` | `synthetic` | Lựa chọn nguồn camera cổ tay: <br>• `realsense` (hoặc `d455`, `d435`, `d405`): Dùng SDK `pyrealsense2` chuyên dụng (Khuyến nghị). <br>• `real`: Tự động tìm RealSense, nếu không có sẽ dùng OpenCV V4L2. <br>• `synthetic`: Camera ảo 3D mô phỏng. |
+| `--camera-device` | `int` | `0` | Chỉ số Device ID của camera OpenCV V4L2 (`0` tương ứng `/dev/video0`, `2` tương ứng `/dev/video2`). |
+| `--camera-serial` | `string` | `None` (Auto) | Mã số Serial number của camera Intel RealSense (lấy từ lệnh `rs-enumerate-devices`). Dùng khi máy tính gắn 2 camera RealSense trở lên. |
+| `--record` | `string` | `None` | Kích hoạt bộ ghi log dữ liệu hành vi người dùng ra định dạng JSONL theo thời gian thực. <br>Ví dụ: `--record logs/pick_place_01.jsonl` |
+
+---
+
+### 6.7. Dấu Hiệu Nhận Biết Kết Nối Phần Cứng Thành Công Trên Terminal
+
+Khi khởi chạy với robot thật và camera thật, terminal sẽ hiển thị chuỗi xác thực chuẩn sau:
 ```text
-[Setup] Connected. Joints: [...]
+============================================================
+ KHỞI ĐỘNG HỆ THỐNG VR TELEOP (META QUEST 3S) 
+============================================================
+[Hệ thống] Đang kết nối PyRoki (CPU JIT) và Robot UR3e tại IP: 10.42.0.242...
+[Quest] WSS Server running at wss://0.0.0.0:8444
+[Quest] WS Server (Plain) running at ws://0.0.0.0:8445
+[Quest] HTTPS Server running at https://0.0.0.0:8443
+[Setup] Connecting RTDEReceive...
+[Setup] Connected. Joints: [0.001, -2.198, 1.896, -1.571, -1.570, 0.000]
+[PyRoki] Khởi tạo bộ giải IK CPU cho UR3e...
+[PyRoki] Bộ giải IK PyRoki CPU đã sẵn sàng!
+[Hệ thống] Khởi tạo Driver Intel RealSense chuyên dụng (pyrealsense2, Serial: Auto)
+[Camera Pipeline] Khởi động luồng truyền video cổ tay (FPS: 30)...
 [ServoJ] RTDEControl connected: True
+[Viser UI Event] Người dùng BẬT Teleop từ giao diện.
 [Teleop] KÍCH HOẠT ĐIỀU KHIỂN.
 ```
-*(Không còn xuất hiện thông báo lỗi `Remote Control` hay cảnh báo dừng `SingularityTrap`).*
+
+---
+
+### 6.8. Check-list 5 Phút An Toàn Trước Khi Bật Teleop Trên Robot Thật
+
+Trước khi tích chọn **Bật Điều Khiển (Teleop)** trên Viser UI hoặc bấm **Nút B** trên tay cầm Quest, hãy rà soát nhanh 6 điểm an toàn sau:
+
+1. [ ] **Chế độ Remote Control:** Góc trên bên phải màn hình PolyScope đang hiển thị biểu tượng Remote (hình mạng máy tính), không phải hình tay dạy cầm tay (Local).
+2. [ ] **Thanh tốc độ PolyScope:** Kéo thanh trượt tốc độ xuống mức **10% – 20%** cho lần di chuyển đầu tiên.
+3. [ ] **Khoảng cách vật lý:** Đảm bảo không có người hoặc vật cản nằm trong bán kính vươn 50cm của cánh tay UR3e.
+4. [ ] **Nút dừng khẩn cấp:** Người vận hành hoặc người hỗ trợ luôn cầm Teach Pendant trên tay, ngón tay đặt sẵn trên nút E-Stop màu đỏ.
+5. [ ] **Tọa độ Widget 3D trên Viser:** Kiểm tra mô hình robot 3D trên Viser (`http://localhost:8080`) đang hiển thị góc khớp và vị trí đầu TCP khớp hoàn toàn với vị trí thực tế của robot ngoài đời.
+6. [ ] **Hiệu chuẩn hướng bàn máy:** Đứng thẳng hướng về phía robot, bóp giữ Grip và bấm Nút B để chốt mỏ neo hướng Tiến thẳng về phía bàn máy.
+
+---
 
 ---
 
@@ -520,7 +800,7 @@ python3 main.py --robot-ip 192.168.1.100 --camera real --camera-device 0
 ### 1. Kiểm thử tự động Gắp Cà chua & Xuất HDF5
 Chạy kiểm thử toàn bộ chu trình gắp thả và lưu dữ liệu:
 ```bash
-python3 tests/test_simulated_pick_and_place.py
+python tests/test_simulated_pick_and_place.py
 ```
 Kết quả kiểm tra:
 - Tập tin Demonstration HDF5 được tạo tại: `logs/ai_training_data/test_grasp_sim/episode_X.hdf5`.
@@ -529,36 +809,36 @@ Kết quả kiểm tra:
 ### 2. Kiểm thử Camera ảo Cổ tay (Synthetic Wrist Camera)
 Kiểm tra khả năng render camera cổ tay ở 4 góc nhìn khác nhau:
 ```bash
-python3 tests/test_camera.py
+python tests/test_camera.py
 ```
 Các file ảnh kết xuất sẽ được lưu vào thư mục `logs/` (`test_cam_center.jpg`, `test_cam_left.jpg`,...).
 
 Nếu muốn kiểm tra trực quan bằng thanh trượt trên giao diện Web Viser:
 ```bash
-python3 tests/test_camera.py --gui
+python tests/test_camera.py --gui
 ```
 Sau đó mở trình duyệt tại `http://localhost:8089` để kéo tọa độ quả cà chua trực tiếp.
 
 ### 3. Kiểm thử Lớp Bảo Vệ Điểm Kỳ Dị (Singularity Guard)
 ```bash
-python3 tests/test_singularity_guard.py
+python tests/test_singularity_guard.py
 ```
 Kiểm tra tính toán ma trận Jacobian metric ($\sigma_{min}$) trên CPU ở cả tư thế an toàn lẫn tư thế duỗi thẳng cổ tay ($q_5 \approx 0$).
 
 ### 4. Kiểm định chất lượng Tập Dữ Liệu (Sanity Check)
 ```bash
-python3 core/verify_dataset.py
+python core/verify_dataset.py
 ```
 Kiểm tra toàn vẹn các episode: xác minh không có giá trị `NaN`/`Inf`, kiểm tra độ lệch chu kỳ lấy mẫu `dt`, kiểm tra số frame và độ phân giải ảnh camera.
 
 ### 5. Tái lập Quỹ đạo Demonstration (Replay)
 - **Offline Dry-Run (kiểm tra quỹ đạo an toàn trên Viser, không gửi lệnh sang robot):**
   ```bash
-  python3 core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5
+  python core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5
   ```
 - **Live Replay (gửi lệnh điều khiển trực tiếp tới URSim / Robot thật):**
   ```bash
-  python3 core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5 --execute --ip 127.0.0.1
+  python core/replay_episode.py --file logs/ai_training_data/test_grasp_sim/episode_0.hdf5 --execute --ip 127.0.0.1
   ```
 
 ---
@@ -574,11 +854,18 @@ Kiểm tra toàn vẹn các episode: xác minh không có giá trị `NaN`/`Inf`
 | **Hạt giống giải IK (seed)** | `q_var.with_value(seed)` | Khởi tạo nghiệm xấp xỉ bằng góc khớp hiện tại, hội tụ cực nhanh. |
 | **ServoJ Lookahead Time** | `0.12` s | Nội suy dự đoán đa chu kỳ chuẩn Universal Robots, triệt tiêu vi rung giật. |
 | **ServoJ Gain** | `250` | Độ cứng vị trí tối ưu trên robot vật lý, giúp chuyển động lướt êm ái không bị gắt cơ học. |
-| **Vận tốc khớp tối đa (Rate Limiter)** | `0.6` rad/s ($\approx 34.4^\circ$/s) | Scaled Vector Limiter co giãn đồng bộ cả 6 khớp, phản hồi nhanh nhạy và mượt mà. |
-| **Ngưỡng phát hiện vặn xoắn khớp** | `1.5` rad | Chặn những bước nhảy đột ngột do đảo nghiệm IK gần điểm kỳ dị. |
-| **Giới hạn khớp khuỷu (elbow_joint)** | `[-2.80, 2.80]` rad | Cho phép gập sâu tự nhiên (~160 độ) khi hạ thấp gắp cà chua, PyRoki quản lý góc khớp an toàn. |
-| **Giới hạn khớp cổ tay (wrist_1, wrist_2)** | `[-2π, 2π]` rad | Duy trì dải quay đầy đủ của URDF, kết hợp `normalize_to_current` chống vặn xoắn. |
-| **Giới hạn khớp nâng vai (shoulder_lift)** | `[-π, 0.25]` rad | Cho phép vươn tự nhiên, chống chúi lật cắm bắp tay xuống mặt bàn. |
+| **Vận tốc khớp tối đa (Rate Limiter)** | `1.0` rad/s ($\approx 57.3^\circ$/s) | Scaled Vector Limiter co giãn đồng bộ cả 6 khớp, phản hồi tức thì, bắt kịp chuyển động tay VR. |
+| **Bán kính làm việc tối đa (r_max)** | `0.52` m | Mở rộng ranh giới hình trụ bảo vệ Descartes thêm 3cm, bao phủ trọn vẹn mép bàn thao tác. |
+| **Độ cao an toàn tối thiểu (z_min)** | `0.035` m ($35\text{mm}$) | Cho phép hạ ngàm sát đáy khay gắp vật mỏng, vẫn cách mặt bàn gỗ $7.5\text{cm}$ chống va chạm. |
+| **Hộp không gian làm việc (Bounding Box)** | $XY \pm 0.52\text{m}$, $Z \in [0.035, 0.60]\text{m}$ | Đồng bộ hóa không gian thao tác đa hướng cho cả tay cầm VR Quest và chuột PC Viser. |
+| **Ngưỡng Singularity Warning & Danger** | $\sigma_{warn} = 0.042$, $\sigma_{danger} = 0.028$ | Continuous Damping hãm mượt (sàn 0.45) khi áp sát nguy hiểm, không cản trở chuyển động vươn xa. |
+| **Dung sai vị trí IK (pos_err)** | `< 0.018` m ($18\text{mm}$) | Nâng tỷ lệ hội tụ IK vùng biên vươn xa lên >98%, triệt tiêu lỗi từ chối lệnh ảo. |
+| **Ngưỡng phát hiện vặn xoắn khớp** | `2.2` rad | Chặn những bước nhảy đột ngột do đảo nhánh IK đột ngột gần điểm kỳ dị. |
+| **Giới hạn khớp khuỷu (elbow_joint)** | `[+0.10, +2.40]` rad | Chống cùi chỏ tự gập sát đâm vào thân robot, đồng thời cho phép duỗi vươn xa mép bàn. |
+| **Giới hạn khớp cổ tay (wrist_1_joint)** | `[-3.20, +0.10]` rad | Chống bẻ ngược cổ tay vào bắp tay, mở góc ngửa gắp đặt tự nhiên. |
+| **Giới hạn khớp cổ tay (wrist_2_joint)** | `[-2.95, -0.20]` rad | Giới hạn an toàn chống tự va chạm liên kết cổ tay và ngàm. |
+| **Giới hạn khớp nâng vai (shoulder_lift)** | `[-2.65, +0.20]` rad | Cho phép vươn tự nhiên, chống chúi lật cắm bắp tay xuống mặt bàn. |
+| **Bán kính bảo vệ thân robot (r_min)** | `0.14` m | Cột trụ ảo xuyên suốt trục Z bảo vệ đế robot, mở rộng không gian thao tác tối đa. |
 | **Thuật toán quy hoạch Home** | URScript 2 pha `movej` | Chạy trực tiếp ở tần số 500Hz trên URControl qua cổng Secondary 30002 (`a=0.8`, `v=0.5`). |
 | **Bán kính bo cung waypoints Home** | `0.03` m | Bo cong góc mượt mà qua điểm trung gian nâng cao trước khi về Home. |
 | **Tần số cập nhật Viser khi về Home** | 25 Hz (`dt = 0.04`s) | Cập nhật dáng robot Viser 3D mượt mà theo góc khớp thực trong suốt quá trình về Home. |

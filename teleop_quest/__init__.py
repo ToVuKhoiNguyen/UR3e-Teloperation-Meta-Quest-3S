@@ -10,7 +10,7 @@ from teleop_quest.pose_sources import WidgetPoseSource, get_robot_fk_as_ur
 from teleop_quest.home_planner import HomePlanner
 from teleop_quest.grasp_simulator import GraspSimulator
 from teleop_quest.timeout_watchdog import TimeoutWatchdog
-from teleop_quest.camera_driver import create_wrist_camera
+from teleop_quest.camera_driver import create_wrist_camera, EthernetWristCamera, RealSenseWristCamera
 from teleop_quest.bootstrap import (
     load_singularity_config,
     ensure_ursim_container,
@@ -30,6 +30,8 @@ __all__ = [
     "GraspSimulator",
     "TimeoutWatchdog",
     "create_wrist_camera",
+    "EthernetWristCamera",
+    "RealSenseWristCamera",
     "load_singularity_config",
     "ensure_ursim_container",
     "start_adb_watcher",

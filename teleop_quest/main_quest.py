@@ -205,6 +205,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UR3e WebXR Teleoperation")
     parser.add_argument("--robot-ip", type=str, default=os.environ.get("ROBOT_IP", "127.0.0.1"), help="Địa chỉ IP của Robot UR3e hoặc URSim")
     parser.add_argument("--camera", type=str, choices=["synthetic", "real", "realsense", "d455", "d435"], default="synthetic", help="Nguồn camera: synthetic, real hoặc realsense (D455/D435)")
+    parser.add_argument("--cam-source", type=str, choices=["usb", "eth"], default="usb", help="Phương thức kết nối camera: usb (trực tiếp) hoặc eth (qua cáp mạng Ethernet)")
+    parser.add_argument("--cam-url", type=str, default=os.environ.get("CAM_URL", "tcp://192.168.1.100:5555"), help="Địa chỉ mạng Ethernet của camera (VD: tcp://192.168.1.100:5555 hoặc http://192.168.1.100:8080/stream)")
     parser.add_argument("--camera-device", type=int, default=0, help="Device ID của camera thật (OpenCV)")
     parser.add_argument("--camera-serial", type=str, default=None, help="Serial number của camera RealSense (mặc định: tự động nhận diện)")
     args, _ = parser.parse_known_args()
@@ -269,7 +271,15 @@ def main():
     ui.set_episodes(logger.current_episode_idx)
 
     grasp_sim = GraspSimulator(ui.server, pick_pos=pick_pos, place_pos=place_pos)
-    wrist_cam = create_wrist_camera(camera_type=args.camera, device_index=args.camera_device, serial_number=args.camera_serial, width=640, height=480)
+    wrist_cam = create_wrist_camera(
+        camera_type=args.camera,
+        cam_source=args.cam_source,
+        cam_url=args.cam_url,
+        device_index=args.camera_device,
+        serial_number=args.camera_serial,
+        width=640,
+        height=480
+    )
 
     camera_pipeline = CameraStreamPipeline(
         wrist_cam=wrist_cam,
@@ -501,7 +511,12 @@ def main():
             q_real = None
             fk_res = None
 
-        # G. Phát hiện sự kiện nhả cò súng (Trigger: 1 -> 0):
+        # G. Xử lý phản hồi xúc giác và dừng an toàn cho Cò súng (Trigger) & Grip
+        # Bắt cạnh lên (0 -> 1): Xung rung nhấp nhẹ mượt mà (tactile click) xác nhận bắt đầu điều khiển
+        if not _last_trig_state and _is_trig:
+            quest_server.send_haptic(intensity=0.35, duration=40)
+
+        # Phát hiện sự kiện nhả cò súng (Trigger: 1 -> 0):
         # Dừng robot ngay lập tức và in log xác nhận trạng thái cò = 0 và vận tốc motor = 0
         if _last_trig_state and not _is_trig:
             executor.stop(10.0)
@@ -518,6 +533,10 @@ def main():
                 motor_vel = 0.0
             print(f"[Teleop] Cò súng nhả (cò=0) -> Dừng robot ngay lập tức (vận tốc motor = {motor_vel:.4f} rad/s)")
         _last_trig_state = _is_trig
+
+        # Bắt cạnh lên (0 -> 1) cho Hand Grip: Xung rung nhấp nhẹ mượt mà xác nhận bắt đầu xoay
+        if not _last_grip_state and _is_grip:
+            quest_server.send_haptic(intensity=0.35, duration=40)
 
         # Tương tự khi nhả Grip xoay
         if _last_grip_state and not _is_grip:
@@ -561,7 +580,7 @@ def main():
         t_latency_hud = (time.perf_counter() - t_hud_start) * 1000.0
 
         if _is_trig and delta_trans is not None and len(delta_trans) >= 1 and delta_trans[0] > 0.01:
-            disp_cm = min(delta_trans[0] * 0.20 * 100.0, 2.5)
+            disp_cm = min(delta_trans[0] * 0.15 * 100.0, 2.0)
             print(f"[HUD] HUD nudged Forward: {disp_cm:.1f}cm (Độ trễ: {t_latency_hud:.2f}ms)")
 
         if toggle_triggered:
@@ -631,7 +650,6 @@ def main():
                     snap_threshold = 1.2 if (is_twisting or is_obstacle) else 1.8
                     if is_stuck:
                         pose_source.out_of_reach_time += POLL_SLEEP
-                        quest_server.send_haptic(intensity=0.8, duration=80)
                     else:
                         pose_source.out_of_reach_time = 0.0
 
@@ -649,7 +667,6 @@ def main():
                         pose_source.out_of_reach_time = 0.0
                         teleop._last_valid_q = list(q_real)
                         ui.set_status("Tự động thu hồi XYZ")
-                        quest_server.send_haptic(intensity=1.0, duration=200)
 
                         if not hasattr(main, "_last_snap_log_time") or time.time() - main._last_snap_log_time > 3.0:
                             main._last_snap_log_time = time.time()

@@ -225,19 +225,21 @@ class QuestServer:
                 except Exception:
                     pass
 
-    def send_camera_frame(self, frame_rgb, quality: int = 75):
+    def send_camera_frame(self, frame_rgb, quality: int = 85):
         """Mã hóa frame ảnh RGB thành JPEG, lưu cache đĩa và gửi tới client qua WebSocket & MJPEG Stream."""
         try:
             import cv2
             import base64
-            # Tự động điều chỉnh kích thước theo tỉ lệ khung hình (giữ đúng tỉ lệ khi xem side-by-side)
+            # Giữ nguyên độ phân giải gốc sắc nét của camera (640x480 hoặc 1280x480 side-by-side)
+            # Chỉ nén lại nếu kích thước chiều ngang vượt quá 1280px để bảo toàn băng thông
             h_f, w_f = frame_rgb.shape[:2]
-            aspect = float(w_f) / float(max(1, h_f))
-            if aspect > 2.0:
-                small = cv2.resize(frame_rgb, (480, int(480 / aspect)))
+            if w_f > 1280:
+                scale = 1280.0 / float(w_f)
+                frame_to_encode = cv2.resize(frame_rgb, (1280, int(h_f * scale)), interpolation=cv2.INTER_AREA)
             else:
-                small = cv2.resize(frame_rgb, (320, 240))
-            bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
+                frame_to_encode = frame_rgb
+
+            bgr = cv2.cvtColor(frame_to_encode, cv2.COLOR_RGB2BGR)
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
             success, encimg = cv2.imencode('.jpg', bgr, encode_param)
             if success:

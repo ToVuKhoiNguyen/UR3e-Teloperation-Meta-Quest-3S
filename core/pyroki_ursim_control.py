@@ -28,59 +28,13 @@ TCP_LINK        = "tool0"          # End-effector link defined in ur3e_custom.ur
 SECONDARY_PORT  = 30002            # URScript secondary interface
 DASHBOARD_PORT  = 29999            # Dashboard server
 
-JOINT_ACCEL     = 0.8              # rad/s^2
-JOINT_SPEED     = 0.5              # rad/s
+JOINT_ACCEL     = 1.5              # rad/s^2
+JOINT_SPEED     = 1.0              # rad/s
 BLEND_RADIUS    = 0.0              # 0 = stop at each waypoint
 
 IK_RETURN_SEEDS = 5                # Number of IK solutions to evaluate
 
-# UR3e joint limits — CONSERVATIVE bounds (±π) to avoid protective stops.
-# URSim's soft limits trigger protective stop for large joint angles even when
-# within URDF range (±2π). Clamping to ±180° keeps motion safe and predictable.
-UR3E_LIMITS = [
-    (-2 * math.pi, 2 * math.pi),  # shoulder_pan_joint   — ±360°
-    (-math.pi, 0.25),             # shoulder_lift_joint  — [-180°, ~14°] vươn tự nhiên, chống chúi lật bàn
-    (-2.80, 2.80),                # elbow_joint          — Cho phép gập sâu tự nhiên (-160° đến 160°)
-    (-2 * math.pi, 2 * math.pi),  # wrist_1_joint        — Cho phép quay tự nhiên tránh đảo nhánh IK gây vặn xoắn
-    (-2 * math.pi, 2 * math.pi),  # wrist_2_joint        — Cho phép quay tự nhiên tránh đảo nhánh IK gây vặn xoắn
-    (-4 * math.pi, 4 * math.pi),  # wrist_3_joint        — ±720°
-]
-
-# ===========================================================================
-# Joint normalisation utilities
-# ===========================================================================
-
-def _nearest_equivalent(angle: float, current: float, lo: float, hi: float) -> float:
-    """Return the angle equivalent (mod 2*pi) that is within [lo, hi] and
-    closest to *current*. Falls back to the raw angle if no equivalent fits."""
-    best, best_dist = angle, float("inf")
-    for k in range(-3, 4):
-        candidate = angle + k * 2 * math.pi
-        if lo <= candidate <= hi:
-            d = abs(candidate - current)
-            if d < best_dist:
-                best_dist, best = d, candidate
-    return best
-
-
-def normalize_to_current(q_ik: list, q_current: list) -> list:
-    """
-    For each joint, replace the raw IK angle with the equivalent angle that
-    is within the UR3e safe limits and closest to the current joint position.
-    This minimises total joint travel and prevents unnecessary wrap-arounds.
-    """
-    return [
-        _nearest_equivalent(q_ik[i], q_current[i], *UR3E_LIMITS[i])
-        for i in range(6)
-    ]
-
-
-def validate_joints(q: list) -> bool:
-    """Return True if all joints are within UR3E_LIMITS. Rejects unsafe solutions."""
-    for i, (lo, hi) in enumerate(UR3E_LIMITS):
-        if not (lo <= q[i] <= hi):
-            return False
-    return True
+# UR3E_LIMITS, normalize_to_current, validate_joints are imported from teleop.pyroki_solver
 
 
 # ===========================================================================

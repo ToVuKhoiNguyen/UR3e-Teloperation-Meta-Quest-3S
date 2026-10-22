@@ -1,9 +1,7 @@
 import os
 import time
 import subprocess
-import cv2
 import numpy as np
-import torch
 import transforms3d
 import viser
 from viser.extras import ViserUrdf
@@ -185,15 +183,15 @@ class TeleopViserUI:
         # 3. Tạo Node 3D HUD (Camera Space Viewport HUD cố định góc màn hình)
         self._hud_mode = "viewport"
         self._active_camera = None
-        self._hud_base_pos = np.array([0.42, -0.38, 0.12], dtype=float)
+        self._hud_base_pos = np.array([0.45, 0.20, 0.14], dtype=float)
 
-        # Ma trận xoay upright dựng đứng đối diện người dùng trong Camera Space (Pitch -75 deg, Yaw -15 deg)
+        # Ma trận xoay upright dựng đứng thẳng đối diện người dùng trong Camera Space (Pitch 0 deg, mặt nút bấm hướng ra ngoài)
         self._r_hud_upright = np.array([
-            [ 0.96592583,  0.25,       -0.0669873  ],
-            [ 0.0,         0.25881905,  0.96592583 ],
-            [ 0.25881905, -0.9330127,   0.25       ]
+            [1.0,  0.0,  0.0],
+            [0.0,  0.0,  1.0],
+            [0.0, -1.0,  0.0]
         ], dtype=float)
-        self._q_hud_upright = (0.7865661, -0.6035534, -0.1035534, -0.0794593)
+        self._q_hud_upright = (0.7071068, -0.7071068, 0.0, 0.0)
         self._hud_base_wxyz = self._q_hud_upright
         self._init_ctrl_wxyz = self._hud_base_wxyz
 
@@ -424,7 +422,7 @@ class TeleopViserUI:
             u_down = r_cam[:, 1]
             u_fwd = r_cam[:, 2]
 
-            d_fwd = 0.50
+            d_fwd = 0.45
             s_right = 0.20
             s_down = 0.14
             self._hud_base_pos = np.array(cam_pos) + d_fwd * u_fwd + s_right * u_right + s_down * u_down
@@ -458,8 +456,9 @@ class TeleopViserUI:
         """
         Cập nhật hiển thị toàn diện của 3D HUD:
           1. Nút bấm: Đổi màu sắc model GLB theo 8 biến thể.
-          2. Hướng xoay: Đồng bộ góc xoay cổ tay qua vr_quat.
-          3. Dịch chuyển tịnh tiến: Cập nhật mũi tên 3D và độ đàn hồi vi mô.
+          2. Hướng xoay: Đồng bộ góc xoay cổ tay qua vr_quat CHỈ KHI BÓP CÒ / GRIP.
+          3. Dịch chuyển tịnh tiến: Nhích vi mô (Micro-translation) CHỈ KHI BÓP CÒ TIẾN/LÙI.
+          4. Khi nhả cò: Đàn hồi giật về vị trí Base Position và góc đứng thẳng ban đầu.
         """
         if hasattr(self, "cb_show_controller") and not self.cb_show_controller.value:
             for h in self._ctrl_handles.values():
@@ -500,8 +499,9 @@ class TeleopViserUI:
                     self._active_camera = c.camera
                     self._calc_hud_pose_from_cam(c.camera.position, c.camera.wxyz)
 
-        # 2. Quản lý góc xoay tay cầm (Quaternion Sync)
-        if vr_quat is not None and len(vr_quat) == 4:
+        # 2. Quản lý góc xoay tay cầm (Chỉ xoay khi bóp cò / grip; khi nhả cò thì đứng thẳng hướng mặt về màn hình)
+        is_active = is_translating or is_rotating
+        if is_active and vr_quat is not None and len(vr_quat) == 4:
             try:
                 q = np.array(vr_quat, dtype=float)
                 norm_q = np.linalg.norm(q)
@@ -514,35 +514,39 @@ class TeleopViserUI:
                         r_base = transforms3d.quaternions.quat2mat(self._hud_base_wxyz)
                         r_hud = r_base @ r_wrist
                     else:
-                        r_hud = r_wrist @ self._r_align
+                        r_hud = r_wrist
                     self._hud_frame.wxyz = tuple(transforms3d.quaternions.mat2quat(r_hud))
             except Exception:
-                pass
+                if hasattr(self, "_hud_base_wxyz"):
+                    self._hud_frame.wxyz = self._hud_base_wxyz
         elif hasattr(self, "_hud_base_wxyz"):
+            # Khi nhả cò: Giật đàn hồi ngay lập tức về tư thế đứng thẳng tĩnh ban đầu
             self._hud_frame.wxyz = self._hud_base_wxyz
 
         # 3. Quản lý phản hồi tịnh tiến (Độ đàn hồi vi mô - Micro-translation)
+        # - KHI BÓP CÒ TIẾN/LÙI/TRÁI/PHẢI/LÊN/XUỐNG: Nhích vi mô tối đa đúng 2.0cm
+        # - KHI NHẢ CÒ: Đàn hồi lập tức giật về vị trí gốc Base Position
         if hasattr(self, "_hud_frame") and hasattr(self, "_hud_base_pos"):
             if is_translating and delta_trans is not None and len(delta_trans) == 3:
                 d_fwd = float(delta_trans[0])
                 d_lat = float(delta_trans[1])
                 d_vert = float(delta_trans[2])
-                alpha_micro = 0.20
+                alpha_micro = 0.15
                 if hasattr(self, "_r_cam_current"):
                     u_right = self._r_cam_current[:, 0]
                     u_down = self._r_cam_current[:, 1]
                     u_fwd = self._r_cam_current[:, 2]
+                    # Phản hồi theo hệ trục Camera: Tiến (+fwd), Sang Phải (+right), Lên Trên (-down)
                     disp = (d_lat * u_right - d_vert * u_down + d_fwd * u_fwd) * alpha_micro
                 else:
-                    disp = np.array([
-                        -0.7071 * d_fwd + 0.7071 * d_lat,
-                         0.7071 * d_fwd + 0.7071 * d_lat,
-                         d_vert
-                    ], dtype=float) * alpha_micro
+                    disp = np.array([d_lat, -d_vert, d_fwd], dtype=float) * alpha_micro
+
                 disp_norm = np.linalg.norm(disp)
-                if disp_norm > 0.025:
-                    disp = disp * (0.025 / disp_norm)
+                max_disp = 0.020  # Khống chế dịch chuyển tối đa đúng 2.0cm
+                if disp_norm > max_disp:
+                    disp = disp * (max_disp / disp_norm)
                 self._hud_frame.position = tuple(self._hud_base_pos + disp)
             else:
+                # Trạng thái tĩnh: Neo cố định tại Base Position
                 self._hud_frame.position = tuple(self._hud_base_pos)
 

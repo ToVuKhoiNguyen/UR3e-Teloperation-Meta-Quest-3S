@@ -5,6 +5,47 @@ import numpy as np
 import transforms3d
 from scipy.spatial.transform import Rotation as R
 
+def isolate_rotation_axes(rotvec, snap_ratio=0.30, smooth_high=0.60, deadband=0.026):
+    """
+    Thuật toán lọc nhiễu trục xoay độc lập (Rotation Axis Isolation):
+    - rotvec: mảng 3 phần tử [pitch, yaw, roll] (theo radian hoặc độ).
+    - deadband: ngưỡng vi rung tĩnh (mặc định 0.026 rad ~ 1.5 độ). Nếu norm < deadband -> trả về [0, 0, 0].
+    - snap_ratio: ngưỡng cô lập trục (mặc định 0.30, tương ứng trục chính > 3.3x trục phụ).
+      Nếu tỷ số abs(rotvec[j]) / abs(rotvec[main]) < snap_ratio -> ép trục phụ về 0.0.
+    - smooth_high: ngưỡng mở xoay 3D đa trục tự do (mặc định 0.60).
+      Nếu snap_ratio <= ratio < smooth_high: làm mềm bằng đa thức Hermite smoothstep.
+    - Bảo toàn 100% biên độ của trục chủ đạo.
+    """
+    v = np.array(rotvec, dtype=float)
+    mag = np.linalg.norm(v)
+    if mag < deadband:
+        return np.zeros(3, dtype=float)
+
+    abs_v = np.abs(v)
+    max_idx = int(np.argmax(abs_v))
+    max_val = abs_v[max_idx]
+
+    if max_val < 1e-6:
+        return np.zeros(3, dtype=float)
+
+    out = np.zeros(3, dtype=float)
+    out[max_idx] = v[max_idx]
+
+    for i in range(3):
+        if i == max_idx:
+            continue
+        ratio = abs_v[i] / max_val
+        if ratio < snap_ratio:
+            out[i] = 0.0
+        elif ratio < smooth_high:
+            t = (ratio - snap_ratio) / max(smooth_high - snap_ratio, 1e-6)
+            scale = t * t * (3.0 - 2.0 * t)  # Hermite smoothstep
+            out[i] = v[i] * scale
+        else:
+            out[i] = v[i]
+
+    return out
+
 class DeltaPoseSource:
     """
     Implements PoseSource contract.
@@ -30,7 +71,7 @@ class DeltaPoseSource:
         self._ema_pos = None
         self._ema_quat_xyzw = None
         
-        self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "0") == "1"
+        self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "1") == "1"
         self.nav_mode = os.environ.get("NAV_MODE", "cylindrical").lower()
         self.rotation_mode = os.environ.get("ROTATION_MODE", "decoupled_3axis").lower()
         # Hiệu chuẩn hướng bàn máy (Desk-Aligned):
@@ -52,19 +93,19 @@ class DeltaPoseSource:
         self.last_delta_mag = 0.0
 
         # Cấu hình chống nhiễu chuyên sâu (Anti-Noise & Jitter Suppression)
-        self.rot_deadband = float(os.environ.get("ROT_DEADBAND", "0.045"))  # ~2.6 độ (triệt tiêu rung tay khi bóp giữ phím)
+        self.rot_deadband = float(os.environ.get("ROT_DEADBAND", "0.026"))  # ~1.5 độ (triệt tiêu vi rung sinh học khi bóp giữ phím)
         self.pos_deadband = float(os.environ.get("POS_DEADBAND", "0.003"))  # 3mm (triệt tiêu vi rung khi giữ yên tay)
         self.fwd_deadband = float(os.environ.get("FWD_DEADBAND", "0.0015")) # 1.5mm (nhạy bén cho trục Tiến/Lùi dải nhỏ)
         self.lat_deadband = float(os.environ.get("LAT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu rung lắc ngang do bóp ngón trỏ)
         self.vert_deadband = float(os.environ.get("VERT_DEADBAND", "0.0035")) # 3.5mm (triệt tiêu vi rung nâng hạ tay)
         self.enable_cross_axis_damping = os.environ.get("CROSS_AXIS_DAMPING_ENABLE", "1") == "1"
-        self.cone_deadzone_low = float(os.environ.get("CONE_DEADZONE_LOW", os.environ.get("CROSS_AXIS_THRESH_LOW", "0.20")))   # < 20%: ép trục phụ về 0.0 (rãnh đi thẳng tuyệt đối)
-        self.cone_deadzone_high = float(os.environ.get("CONE_DEADZONE_HIGH", os.environ.get("CROSS_AXIS_THRESH_HIGH", "0.50"))) # > 50%: mở khóa 100% đi chéo tự do
+        self.cone_deadzone_low = float(os.environ.get("CONE_DEADZONE_LOW", os.environ.get("CROSS_AXIS_THRESH_LOW", "0.40")))   # < 40%: ép trục phụ về 0.0 (rãnh khóa trục cứng cáp, chống lệch chéo)
+        self.cone_deadzone_high = float(os.environ.get("CONE_DEADZONE_HIGH", os.environ.get("CROSS_AXIS_THRESH_HIGH", "0.70"))) # > 70%: mở khóa 100% đi chéo chủ ý
         self.cross_axis_low = self.cone_deadzone_low
         self.cross_axis_high = self.cone_deadzone_high
         self.cross_axis_damping = 0.0
-        self.rot_snap_low = float(os.environ.get("ROT_SNAP_LOW", "0.55"))   # < 55%: khóa cứng rãnh đơn trục (Phương án A)
-        self.rot_snap_high = float(os.environ.get("ROT_SNAP_HIGH", "0.75")) # > 75%: mở xoay 3D đa trục khi chủ ý bẻ chéo lớn
+        self.rot_snap_low = float(os.environ.get("ROT_SNAP_LOW", "0.30"))   # < 30%: triệt tiêu 100% trục phụ về 0.0 (Snap to single axis)
+        self.rot_snap_high = float(os.environ.get("ROT_SNAP_HIGH", "0.60")) # > 60%: mở xoay 3D đa trục khi chủ ý bẻ chéo lớn
         self._last_dominant_rot_axis = None
 
         self._last_button_state = 0
@@ -175,12 +216,13 @@ class DeltaPoseSource:
     def _apply_soft_rotation_snapping(self, rotvec_tcp, rot_deadband=None):
         """
         Khóa trục xoay thông minh (Soft Rotation Snapping) & Bộ lọc triệt tiêu rò rỉ chéo đa tầng:
-        - Soft deadband (mặc định 0.045 rad ~ 2.6 độ): Triệt tiêu hoàn toàn vi rung sinh học khi bóp giữ phím Grip.
+        - Angular Deadband (mặc định 0.026 rad ~ 1.5 độ): Triệt tiêu hoàn toàn vi rung sinh học khi bóp giữ phím Grip.
         - Khóa trục độc lập (< 30%): Khi người dùng chủ ý xoay 1 trục (Pitch, Yaw hoặc Roll),
-          các trục phụ nhỏ hơn 30% trục chính bị triệt tiêu hoàn toàn về 0.0.
-        - Chống đảo trục chập chờn (Hysteresis Latch): Ưu tiên giữ trục chính đã chọn nếu trục mới chưa vượt trội > 15%.
-        - Hòa trộn 3D tự nhiên (30% - 50%): Chuyển tiếp mượt mà bằng đường cong Hermite;
-          khi > 50%, mở khóa hoàn toàn cho phép xoay 3D đa trục tự do.
+          các trục phụ nhỏ hơn 30% trục chính (tỷ số < 0.30) bị triệt tiêu hoàn toàn về 0.0.
+        - Chống đảo trục chập chờn (Hysteresis Latch 0.80): Giữ ổn định trục chính đã chọn nếu trục mới chưa vượt trội > 20%.
+        - Hòa trộn 3D tự nhiên (30% - 60%): Chuyển tiếp mượt mà bằng đường cong Hermite Smoothstep;
+          khi >= 60%, mở khóa hoàn toàn cho phép xoay 3D đa trục tự do.
+        - Bảo toàn 100% biên độ của trục chủ đạo.
         """
         if rot_deadband is None:
             rot_deadband = self.rot_deadband
@@ -188,28 +230,27 @@ class DeltaPoseSource:
         mag = np.linalg.norm(rotvec_tcp)
         if mag < rot_deadband:
             self._last_dominant_rot_axis = None
-            return np.zeros(3)
+            return np.zeros(3, dtype=float)
 
-        # Trừ hao deadband để chuyển động bắt đầu từ 0 liên tục, không giật nảy
-        scaled_rotvec = rotvec_tcp * ((mag - rot_deadband) / mag)
-        abs_v = np.abs(scaled_rotvec)
+        abs_v = np.abs(rotvec_tcp)
         curr_max_idx = int(np.argmax(abs_v))
         curr_max_val = abs_v[curr_max_idx]
 
-        if curr_max_val < 1e-4:
+        if curr_max_val < 1e-5:
             self._last_dominant_rot_axis = None
-            return np.zeros(3)
+            return np.zeros(3, dtype=float)
 
         # Hysteresis Latch: Giữ ổn định trục chính, tránh hiện tượng rung giật lật trục khi 2 trục gần bằng nhau
         dominant_idx = curr_max_idx
         if self._last_dominant_rot_axis is not None and self._last_dominant_rot_axis != curr_max_idx:
             prev_val = abs_v[self._last_dominant_rot_axis]
-            if prev_val > 0.85 * curr_max_val:
+            if prev_val > 0.80 * curr_max_val:
                 dominant_idx = self._last_dominant_rot_axis
                 curr_max_val = prev_val
         self._last_dominant_rot_axis = dominant_idx
 
-        snapped = np.copy(scaled_rotvec)
+        snapped = np.zeros(3, dtype=float)
+        snapped[dominant_idx] = rotvec_tcp[dominant_idx]
         for i in range(3):
             if i == dominant_idx:
                 continue
@@ -217,11 +258,11 @@ class DeltaPoseSource:
             if ratio < self.rot_snap_low:
                 snapped[i] = 0.0
             elif ratio < self.rot_snap_high:
-                t = (ratio - self.rot_snap_low) / (self.rot_snap_high - self.rot_snap_low)
-                scale = t * t * (3.0 - 2.0 * t) # Hermite smoothstep
-                snapped[i] = scaled_rotvec[i] * scale
+                t = (ratio - self.rot_snap_low) / max(self.rot_snap_high - self.rot_snap_low, 1e-6)
+                scale = t * t * (3.0 - 2.0 * t)  # Hermite smoothstep
+                snapped[i] = rotvec_tcp[i] * scale
             else:
-                snapped[i] = scaled_rotvec[i]
+                snapped[i] = rotvec_tcp[i]
 
         return snapped
 
@@ -454,7 +495,7 @@ class DeltaPoseSource:
                 # - Sang Trái (d_lateral < 0) -> q0 tăng (quay ngược chiều kim đồng hồ)
                 delta_arc = d_lateral
                 delta_arc = np.clip(delta_arc, -self.max_delta_m, self.max_delta_m)
-                delta_q0 = -delta_arc / max(r_reach, 0.12)
+                delta_q0 = -delta_arc / max(r_reach, 0.18)
                 delta_q0 = np.clip(delta_q0, -0.65, 0.65)  # Khống chế góc quay tối đa ~37 độ / lần bóp cò
 
                 q0_target = q0_anc + delta_q0
@@ -469,8 +510,13 @@ class DeltaPoseSource:
                 ])
 
                 # 2. Tiến / Lùi -> Duỗi dài hoặc Thu ngắn kim đồng hồ theo phương vươn cơ học:
-                # Vector vươn u_reach nằm trong mặt phẳng tay máy tại góc đế q0_target:
-                u_reach = np.array([np.cos(q0_target), np.sin(q0_target), 0.0])
+                # Vector vươn hướng tâm u_reach từ tâm Base Z ra điểm mỏ neo đã xoay p_rot:
+                r_rot_xy = float(np.hypot(p_rot[0], p_rot[1]))
+                if r_rot_xy > 1e-6:
+                    u_reach = np.array([p_rot[0] / r_rot_xy, p_rot[1] / r_rot_xy, 0.0])
+                else:
+                    u_reach = np.array([np.cos(q0_target), np.sin(q0_target), 0.0])
+
                 # Khuếch đại phi tuyến dải nhỏ: < 2cm dùng scale_reach = 1.35 giúp đẩy nhẹ tay
                 # thì cánh tay duỗi rõ rệt; khi đẩy dài hơn (> 2cm), chuyển tiếp mượt về 1.05
                 base_scale_reach = float(os.environ.get("REACH_SCALE", "1.05"))
@@ -494,10 +540,10 @@ class DeltaPoseSource:
                 target_pos[2] = z_target
 
                 # Giới hạn an toàn bán kính cơ học:
-                # Dải [0.12m, 0.485m] loại bỏ kẹt lùi, cách thân đế ít nhất 5cm, bảo vệ tầm với 500mm của UR3e
+                # Dải [0.18m, 0.485m] loại bỏ hoàn toàn tự va chạm thân đế (cột trụ ảo R_min = 0.18m)
                 r_target_xy = np.hypot(target_pos[0], target_pos[1])
-                if r_target_xy < 0.12:
-                    scale_r = 0.12 / max(r_target_xy, 1e-6)
+                if r_target_xy < 0.18:
+                    scale_r = 0.18 / max(r_target_xy, 1e-6)
                     target_pos[0] *= scale_r
                     target_pos[1] *= scale_r
                 elif r_target_xy > 0.485:
@@ -539,16 +585,16 @@ class DeltaPoseSource:
             self._current_delta_theta = 0.0
             self._last_dominant_trans_axis = None
 
-        # Workspace safety clamp (Cách mặt bàn ít nhất 5cm, cách thân đế 5cm, bảo vệ tầm với UR3e)
-        target_pos[0] = np.clip(target_pos[0], -0.45, 0.45) # X
-        target_pos[1] = np.clip(target_pos[1], -0.45, 0.45) # Y
-        target_pos[2] = np.clip(target_pos[2], 0.05, 0.55)  # Z (cách mặt bàn ít nhất 5cm an toàn)
+        # Workspace safety clamp (Cách mặt bàn ít nhất 3.5cm, cách thân đế 14cm, bảo vệ tầm với UR3e)
+        target_pos[0] = np.clip(target_pos[0], -0.52, 0.52) # X
+        target_pos[1] = np.clip(target_pos[1], -0.52, 0.52) # Y
+        target_pos[2] = np.clip(target_pos[2], 0.035, 0.60) # Z (cách mặt bàn ít nhất 3.5cm an toàn)
 
-        # Slew Rate Limiter: Tăng trần max_step lên 0.055 (5.5cm / 50ms = 1.1 m/s) giúp phản hồi vươn tay nhanh
+        # Slew Rate Limiter: Tăng trần max_step lên 0.070 (7.0cm / 50ms = 1.4 m/s) giúp phản hồi vươn tay nhanh
         if self._ema_pos is not None:
             pos_step = target_pos - self._ema_pos
             step_mag = np.linalg.norm(pos_step)
-            max_step = 0.055  # tối đa 5.5cm / 50ms = 1.1 m/s
+            max_step = 0.070  # tối đa 7.0cm / 50ms = 1.4 m/s
             if step_mag > max_step:
                 target_pos = self._ema_pos + pos_step * (max_step / step_mag)
 

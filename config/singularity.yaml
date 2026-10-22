@@ -16,6 +16,6 @@ safe_return:
   - 0.0
 thresholds:
   max_qd_ratio: 1.0
-  sigma_min_danger: 0.035
-  sigma_min_warn: 0.06
+  sigma_min_danger: 0.028
+  sigma_min_warn: 0.042
 
