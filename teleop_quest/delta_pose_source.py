@@ -73,7 +73,7 @@ class DeltaPoseSource:
         
         self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "1") == "1"
         self.nav_mode = os.environ.get("NAV_MODE", "cylindrical").lower()
-        self.rotation_mode = os.environ.get("ROTATION_MODE", "decoupled_3axis").lower()
+        self.rotation_mode = os.environ.get("ROTATION_MODE", "task_aligned").lower()
         # Hiệu chuẩn hướng bàn máy (Desk-Aligned):
         # Mặc định khi chưa hiệu chuẩn: [0, 0, -1] và [1, 0, 0]
         self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
@@ -783,12 +783,46 @@ class DeltaPoseSource:
             MAX_ROT_ENVELOPE = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
             omega_scaled = np.clip(omega_scaled, -MAX_ROT_ENVELOPE, MAX_ROT_ENVELOPE)
 
-            # 5. Ánh xạ vector trục quay theo Hệ quy chiếu Mặt đồng hồ (Clock-Face Frame) hoặc Base Frame:
-            if self.nav_mode == "clock_face":
-                # Hệ quy chiếu Mặt đồng hồ động dựa trên tọa độ XY của TCP:
-                # - Radial: Hướng vươn cánh tay từ Base (0, 0) ra TCP
-                # - Tangential: Trục tiếp tuyến ngang trên mặt đồng hồ
-                # - Up: Trục Z thẳng đứng
+            # 5. Ánh xạ vector trục quay theo Task-Aligned Invariant Mapping hoặc Decoupled Mode:
+            if self.rotation_mode in ("task_aligned", "task_invariant") or (self.rotation_mode != "decoupled_3axis" and self.nav_mode in ("task_aligned", "clock_face")):
+                # ===============================================================
+                # TASK-ALIGNED INVARIANT MAPPING:
+                # - Hành động 1 (Uống nước): Gập/ngửa cổ tay -> Chuyển động Pitch
+                #   theo mặt phẳng thẳng đứng dọc thân robot (Body Pitch: u_pitch_axis).
+                # - Hành động 2 (Vặn chìa khóa): Vặn cổ tay -> Tool Roll xoay 100%
+                #   quanh trục dọc của đầu công cụ (Tool Approach Axis: u_tool_axis).
+                # - Hành động 3 (Quét trái/phải): Quét cổ tay -> Base Yaw quanh trục Z.
+                # ===============================================================
+                # 1. Trục dọc đầu công cụ (Tool Approach Axis in Base Frame):
+                u_tool_axis = R_r_anchor.apply([0.0, 0.0, 1.0])
+                norm_tool = float(np.linalg.norm(u_tool_axis))
+                if norm_tool > 1e-6:
+                    u_tool_axis /= norm_tool
+                else:
+                    u_tool_axis = np.array([0.0, 0.0, -1.0])
+
+                # 2. Trục gập thân uống nước (Body Pitch Axis vuông góc với phương vươn u_radial):
+                p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
+                r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
+                if r_anc_xy > 0.03:
+                    theta_arm_cur = float(np.arctan2(p_anc_xy[1], p_anc_xy[0]))
+                elif self._anchor_theta_arm is not None:
+                    theta_arm_cur = float(self._anchor_theta_arm)
+                else:
+                    theta_arm_cur = 0.0
+
+                theta_clock = theta_arm_cur + (self._current_delta_theta if is_translating else 0.0)
+                u_pitch_axis = np.array([-np.sin(theta_clock), np.cos(theta_clock), 0.0], dtype=np.float64)
+
+                # 3. Trục quét chuyển hướng (Base Yaw Axis):
+                u_yaw_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+                omega_robot = (
+                    omega_scaled[0] * u_tool_axis +
+                    omega_scaled[1] * u_pitch_axis +
+                    omega_scaled[2] * u_yaw_axis
+                )
+            elif self.rotation_mode == "decoupled_3axis" and self.nav_mode == "clock_face":
                 p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
                 r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
                 if r_anc_xy > 0.03:
@@ -817,7 +851,7 @@ class DeltaPoseSource:
             else:
                 R_target_robot = R_delta_base_single * R_r_anchor
 
-            axis_names = ["VẶN ĐỒNG HỒ (Roll)", "GẬP/NGỬA (Pitch)", "QUÉT TRÁI/PHẢI (Yaw)"]
+            axis_names = ["VẶN CHÌA KHÓA (Tool Roll)", "UỐNG NƯỚC (Body Pitch)", "QUÉT TRÁI/PHẢI (Yaw)"]
             if self._locked_axis_idx is not None and abs(omega_filtered[self._locked_axis_idx]) > 1e-4:
                 deg_rot = np.degrees(abs(omega_scaled[self._locked_axis_idx]))
                 diag_msg = f"XOAY {axis_names[self._locked_axis_idx]} ({deg_rot:.1f}° | Khóa 1 trục)"

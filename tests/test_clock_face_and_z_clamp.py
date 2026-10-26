@@ -84,6 +84,7 @@ class TestClockFaceAndZClamp(unittest.TestCase):
                 anchor_reference_func=lambda: list(ctrl.tcp())
             )
             src.nav_mode = "clock_face"
+            src.rotation_mode = "decoupled_3axis"
 
             # ── 1. Thao tác TỊNH TIẾN KHÔNG ẤN GRIP (chỉ bóp Trigger) ──
             # Anchor frame
