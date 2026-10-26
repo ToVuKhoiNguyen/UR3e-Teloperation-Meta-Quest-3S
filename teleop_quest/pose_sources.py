@@ -14,8 +14,8 @@ class WidgetPoseSource:
     def __init__(self, target_widget, alpha=0.55):
         self.target_widget = target_widget
         self.alpha = alpha
-        self._prev_read_pos = None
-        self._prev_read_quat_wxyz = None
+        self._prev_read_pos = np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float)
+        self._prev_read_quat_wxyz = np.array(getattr(self.target_widget, "wxyz", [1.0, 0.0, 0.0, 0.0]), dtype=float)
         self.is_translating = False
         self.is_pure_rotation = False
 
@@ -83,6 +83,11 @@ class WidgetPoseSource:
         Đồng bộ mốc tọa độ Gizmo chỉ khi được gọi tường minh với force=True (từ Go Home hoặc startup).
         TUYỆT ĐỐI CẤM ghi đè lên ui.gizmo trong vòng lặp teleop thông thường để chống trôi ảo.
         """
+        if pos is not None:
+            self._prev_read_pos = np.array(pos[:3], dtype=float)
+        if quat is not None:
+            self._prev_read_quat_wxyz = np.array(quat[:4], dtype=float)
+
         if not force:
             return
 
