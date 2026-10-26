@@ -11,11 +11,17 @@ class WidgetPoseSource:
     """
     is_absolute = True
 
-    def __init__(self, target_widget, alpha=0.55):
+    def __init__(self, target_widget, alpha=1.0):
         self.target_widget = target_widget
-        self.alpha = alpha
-        self._prev_read_pos = np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float)
-        self._prev_read_quat_wxyz = np.array(getattr(self.target_widget, "wxyz", [1.0, 0.0, 0.0, 0.0]), dtype=float)
+        self.alpha = float(alpha)
+        init_pos = np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float)
+        init_quat = np.array(getattr(self.target_widget, "wxyz", [1.0, 0.0, 0.0, 0.0]), dtype=float)
+        norm_q = np.linalg.norm(init_quat)
+        init_quat = init_quat / max(1e-6, norm_q)
+        self._prev_read_pos = np.copy(init_pos)
+        self._prev_read_quat_wxyz = np.copy(init_quat)
+        self._ema_pos = np.copy(init_pos)
+        self._ema_quat_wxyz = np.copy(init_quat)
         self.is_translating = False
         self.is_pure_rotation = False
 
@@ -30,16 +36,16 @@ class WidgetPoseSource:
         curr_gizmo_pos[1] = np.clip(curr_gizmo_pos[1], -0.52, 0.52)
         curr_gizmo_pos[2] = np.clip(curr_gizmo_pos[2], 0.015, 0.60)
 
-        # Detect active mouse interaction intent
+        # Detect active mouse interaction intent with sub-millimeter sensitivity
         if self._prev_read_pos is not None and self._prev_read_quat_wxyz is not None:
             d_pos = float(np.linalg.norm(curr_gizmo_pos - self._prev_read_pos))
             dot_q = abs(float(np.dot(curr_gizmo_quat_wxyz, self._prev_read_quat_wxyz)))
             d_rot = 2.0 * float(np.arccos(min(1.0, max(-1.0, dot_q))))
 
-            if d_pos > 0.001:  # user is actively dragging Gizmo translation (> 1mm)
+            if d_pos > 0.0002:  # user is actively dragging Gizmo translation (> 0.2mm)
                 self.is_translating = True
                 self.is_pure_rotation = False
-            elif d_rot > 0.015:  # user is actively rotating Gizmo in place (> 0.85 deg)
+            elif d_rot > 0.008:  # user is actively rotating Gizmo in place (> 0.45 deg)
                 self.is_translating = False
                 self.is_pure_rotation = True
             else:  # stationary / mouse released / idle
@@ -48,6 +54,28 @@ class WidgetPoseSource:
 
         self._prev_read_pos = np.copy(curr_gizmo_pos)
         self._prev_read_quat_wxyz = np.copy(curr_gizmo_quat_wxyz)
+
+        # Update internal EMA tracking states
+        if self._ema_pos is None:
+            self._ema_pos = np.copy(curr_gizmo_pos)
+        else:
+            self._ema_pos = self.alpha * curr_gizmo_pos + (1.0 - self.alpha) * self._ema_pos
+            if np.linalg.norm(curr_gizmo_pos - self._ema_pos) < 0.0001:
+                self._ema_pos = np.copy(curr_gizmo_pos)
+
+        if self._ema_quat_wxyz is None:
+            self._ema_quat_wxyz = np.copy(curr_gizmo_quat_wxyz)
+        else:
+            q_tgt = np.copy(curr_gizmo_quat_wxyz)
+            if np.dot(self._ema_quat_wxyz, q_tgt) < 0.0:
+                q_tgt = -q_tgt
+            self._ema_quat_wxyz = self.alpha * q_tgt + (1.0 - self.alpha) * self._ema_quat_wxyz
+            norm_ema_q = np.linalg.norm(self._ema_quat_wxyz)
+            if norm_ema_q > 1e-6:
+                self._ema_quat_wxyz /= norm_ema_q
+            dot_ema = abs(float(np.dot(curr_gizmo_quat_wxyz, self._ema_quat_wxyz)))
+            if dot_ema > 0.99995:
+                self._ema_quat_wxyz = np.copy(curr_gizmo_quat_wxyz)
 
         return {
             "pos": curr_gizmo_pos.tolist(),
@@ -72,25 +100,18 @@ class WidgetPoseSource:
 
     @property
     def _ema_pos(self):
-        return np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float)
+        return self.__dict__.get("_ema_pos_val", np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float))
 
     @_ema_pos.setter
     def _ema_pos(self, val):
-        pass
+        self._ema_pos_val = np.copy(val) if val is not None else None
 
     def sync_with_robot(self, *args, pos=None, quat=None, joints=None, fk_func=None, force=False, **kwargs):
         """
-        Đồng bộ mốc tọa độ Gizmo chỉ khi được gọi tường minh với force=True (từ Go Home hoặc startup).
-        TUYỆT ĐỐI CẤM ghi đè lên ui.gizmo trong vòng lặp teleop thông thường để chống trôi ảo.
+        Đồng bộ mốc tọa độ Gizmo và bộ lọc EMA với trạng thái robot.
+        - Cập nhật _ema_pos và _prev_read_pos để triệt tiêu bước nhảy tọa độ.
+        - Gọi update_pose(suppress=True) khi có pos/quat mới để duy trì deadband.
         """
-        if pos is not None:
-            self._prev_read_pos = np.array(pos[:3], dtype=float)
-        if quat is not None:
-            self._prev_read_quat_wxyz = np.array(quat[:4], dtype=float)
-
-        if not force:
-            return
-
         if len(args) == 1:
             arg0 = args[0]
             if isinstance(arg0, (list, tuple, np.ndarray)):
@@ -115,12 +136,19 @@ class WidgetPoseSource:
             except Exception:
                 pass
 
+        if pos is not None:
+            self._prev_read_pos = np.array(pos[:3], dtype=float)
+            self._ema_pos = np.array(pos[:3], dtype=float)
+        if quat is not None:
+            self._prev_read_quat_wxyz = np.array(quat[:4], dtype=float)
+            self._ema_quat_wxyz = np.array(quat[:4], dtype=float)
+
         if hasattr(self.target_widget, "update_pose"):
             try:
                 self.target_widget.update_pose(pos=pos, wxyz=quat, suppress=True)
             except Exception:
                 pass
-        else:
+        elif force:
             if pos is not None and hasattr(self.target_widget, "position"):
                 try:
                     self.target_widget.position = tuple(float(x) for x in pos[:3])

@@ -414,6 +414,123 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
             f"Góc Yaw vượt quá giới hạn an toàn 75°! Yaw={math.degrees(yaw_rad):.2f}°"
         )
 
+    def test_05_tilted_controller_anatomical_wrist_isolation(self):
+        """
+        Acceptance Criteria 1 & 2: Phân tách tuyệt đối 3 động tác cổ tay khi tay cầm bị nghiêng tự nhiên
+        (Bàn tay người dùng thường nghiêng [35°, 20°, -15°] so với mặt sàn khi cầm Quest).
+        Chứng minh: Phép tính Local Frame triệt tiêu hoàn toàn lỗi chập vào trục Yaw thẳng đứng!
+        """
+        server = MockQuestServer()
+        joints = [math.radians(30.0), -1.57, 1.57, -1.57, -1.57, 0.0]
+        R_robot_anchor = R.from_euler("xyz", [0.0, math.pi, 0.0])
+        rotvec_anchor = R_robot_anchor.as_rotvec()
+        tcp_pose = [0.30, 0.173, 0.25, rotvec_anchor[0], rotvec_anchor[1], rotvec_anchor[2]]
+
+        ctrl = MockRobotCtrl(joints, tcp_pose)
+        src = DeltaPoseSource(
+            server, ctrl, scale=1.0,
+            anchor_reference_func=lambda: list(ctrl.tcp())
+        )
+        src.rotation_mode = "task_aligned"
+        src.nav_mode = "clock_face"
+
+        # Tay cầm người dùng ở góc nghỉ tự nhiên (nghiêng 35° pitch, 20° yaw, -15° roll so với phòng)
+        R_hand_resting = R.from_euler("xyz", [35.0, 20.0, -15.0], degrees=True)
+        q_rest = R_hand_resting.as_quat()
+
+        # ── KỊCH BẢN 1: Người dùng VẶN CHÌA KHÓA (Wrist Roll quanh trục dọc tay cầm) ──
+        # Clutch reset
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [1.0, 0.0, 0.0, 0.0],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": False
+        })
+        src.get_pose()
+
+        # Anchor Grip tại góc nghỉ
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_rest[3], q_rest[0], q_rest[1], q_rest[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        src.get_pose()
+
+        # Vặn cổ tay theo chiều kim đồng hồ quanh trục dọc tay cầm (local Z: -25°)
+        R_twist_local = R.from_rotvec([0.0, 0.0, -math.radians(25.0)])
+        R_hand_roll = R_hand_resting * R_twist_local
+        q_hr = R_hand_roll.as_quat()
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_hr[3], q_hr[0], q_hr[1], q_hr[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        p_res = None
+        for _ in range(15):
+            p_res = src.get_pose()
+
+        # Xác nhận: Khóa 100% vào kênh 0 (Tool Roll), KHÔNG BỊ CHẬP VÀO YAW THẲNG ĐỨNG (kênh 2)!
+        self.assertEqual(src._locked_axis_idx, 0, "Vặn chìa khóa khi tay nghiêng phải khóa vào Roll (kênh 0)!")
+        q_res = p_res["quat"]
+        R_target = R.from_quat([q_res[1], q_res[2], q_res[3], q_res[0]])
+        v_diff = np.linalg.norm(R_target.apply([0, 0, 1]) - R_robot_anchor.apply([0, 0, 1]))
+        self.assertLess(v_diff, 1e-6, "Tool approach vector phải bất biến khi vặn chìa khóa!")
+
+        # ── KỊCH BẢN 2: Người dùng GẬP CỔ TAY (Wrist Pitch quanh trục ngang tay cầm) ──
+        # Clutch reset
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [1.0, 0.0, 0.0, 0.0],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": False
+        })
+        src.get_pose()
+
+        # Anchor Grip tại góc nghỉ
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_rest[3], q_rest[0], q_rest[1], q_rest[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        src.get_pose()
+
+        # Gập cổ tay xuống quanh trục ngang tay cầm (local X: +20°)
+        R_flex_local = R.from_rotvec([math.radians(20.0), 0.0, 0.0])
+        R_hand_pitch = R_hand_resting * R_flex_local
+        q_hp = R_hand_pitch.as_quat()
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_hp[3], q_hp[0], q_hp[1], q_hp[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        for _ in range(15):
+            p_res = src.get_pose()
+
+        # Xác nhận: Khóa 100% vào kênh 1 (Pitch Uống nước), KHÔNG BỊ CHẬP VÀO YAW THẲNG ĐỨNG!
+        self.assertEqual(src._locked_axis_idx, 1, "Gập cổ tay khi tay nghiêng phải khóa vào Pitch (kênh 1)!")
+
+        # ── KỊCH BẢN 3: Người dùng LẮC CỔ TAY (Wrist Yaw quanh trục đứng tay cầm) ──
+        # Clutch reset
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [1.0, 0.0, 0.0, 0.0],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": False
+        })
+        src.get_pose()
+
+        # Anchor Grip tại góc nghỉ
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_rest[3], q_rest[0], q_rest[1], q_rest[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        src.get_pose()
+
+        # Lắc cổ tay sang trái quanh trục vuông góc mặt tay cầm (local Y: +20°)
+        R_wag_local = R.from_rotvec([0.0, math.radians(20.0), 0.0])
+        R_hand_yaw = R_hand_resting * R_wag_local
+        q_hy = R_hand_yaw.as_quat()
+        server.set_frame({
+            "pos": [0.0, 0.0, 0.0], "quat": [q_hy[3], q_hy[0], q_hy[1], q_hy[2]],
+            "head_quat": [1.0, 0.0, 0.0, 0.0], "trigger": False, "grip": True
+        })
+        for _ in range(15):
+            p_res = src.get_pose()
+
+        # Xác nhận: Khóa 100% vào kênh 2 (Base Yaw)!
+        self.assertEqual(src._locked_axis_idx, 2, "Lắc cổ tay khi tay nghiêng phải khóa vào Yaw (kênh 2)!")
+
 
 if __name__ == "__main__":
     unittest.main()
+

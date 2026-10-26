@@ -769,27 +769,31 @@ class DeltaPoseSource:
 
             R_hand_current = R.from_quat(curr_quat_quest_xyzw)
 
-            # Delta xoay trong Không gian Thực VR (WebXR World Frame):
-            R_delta_world = R_hand_current * R_q_anchor.inv()
-            omega_world = R_delta_world.as_rotvec()
+            # 1. Trích xuất độ lệch xoay trong Hệ quy chiếu Nội tại của Tay cầm (Controller Local Frame):
+            # Delta R_ctrl_local = R_ctrl_origin^{-1} * R_ctrl_now
+            # Phép nhân bên phải (Post-multiply với nghịch đảo của anchor) bảo toàn 100% trục giải phẫu cổ tay,
+            # hoàn toàn độc lập với góc nghiêng tự nhiên của bàn tay hay hướng đứng của người dùng.
+            R_delta_local = R_q_anchor.inv() * R_hand_current
+            omega_local = R_delta_local.as_rotvec()
 
-            # 2. Chiếu vector trục quay qua hệ trục căn chỉnh người dùng / bàn máy (Desk-Aligned):
-            u_fwd = self._anchor_u_fwd if self._anchor_u_fwd is not None else self._desk_u_fwd
-            u_right = self._anchor_u_right if self._anchor_u_right is not None else self._desk_u_right
-            u_up = np.array([0.0, 1.0, 0.0])
-
-            # Các thành phần góc quay theo cử chỉ tự nhiên của người dùng:
-            # - Roll:  Vặn cổ tay / mặt đồng hồ quanh trục nhìn tới u_fwd (Clockwise -> w_roll > 0)
-            # - Pitch: Gập/ngửa cổ tay quanh trục u_right (Cụp xuống -> w_pitch > 0)
-            # - Yaw:   Quét/lắc cổ tay trái/phải quanh trục u_up (Quét sang phải -> w_yaw < 0)
-            w_roll  = float(np.dot(omega_world, u_fwd))
-            w_pitch = float(np.dot(omega_world, u_right))
-            w_yaw   = float(np.dot(omega_world, u_up))
+            # 2. Ba thành phần giải phẫu cổ tay theo chuẩn WebXR Grip Space:
+            # - Trục Z (longitudinal): Vặn chìa khóa / Xoay mặt đồng hồ (Wrist Roll / Twist).
+            #   (WebXR: -Z hướng tới trước, vặn phải = clockwise -> -Z => w_roll = -omega_local[2] > 0)
+            # - Trục X (lateral): Gập / Ngửa cổ tay lên xuống (Wrist Pitch / Flexion-Extension).
+            #   (WebXR: +X sang phải, gập xuống -> +X => w_pitch = -omega_local[0] < 0 để chúc đầu máy xuống)
+            # - Trục Y (vertical): Lắc cổ tay Trái / Phải (Wrist Yaw / Radial-Ulnar Deviation).
+            #   (WebXR: +Y hướng lên, lắc trái -> +Y => w_yaw = +omega_local[1] > 0 quay trái quanh Z_base)
+            w_roll  = -float(omega_local[2])
+            w_pitch = -float(omega_local[0])
+            w_yaw   =  float(omega_local[1])
 
             # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
+            # - Kênh 0: Vặn chìa khóa (Tool Roll quanh trục công cụ)
+            # - Kênh 1: Gập/ngửa cổ tay (Body Pitch dọc thân máy)
+            # - Kênh 2: Lắc cổ tay trái/phải (Base Yaw quanh trục Z)
             omega_gesture = np.array([
                 w_roll,
-                -w_pitch,
+                w_pitch,
                 w_yaw
             ], dtype=np.float64)
 
@@ -844,7 +848,7 @@ class DeltaPoseSource:
                 omega_scaled = np.zeros(3, dtype=np.float64)
 
             # 5. Ánh xạ vector trục quay theo Hệ quy chiếu Mặt đồng hồ đã chốt cố định không bị trôi:
-            if self._clock_u_radial is None or self._clock_u_tangential is None:
+            if self._clock_u_radial is None or self._clock_u_tangential is None or self._clock_u_tool is None:
                 p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
                 r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
                 if r_anc_xy > 0.03:
@@ -856,6 +860,9 @@ class DeltaPoseSource:
                 self._clock_u_radial = np.array([np.cos(theta_arm_cur), np.sin(theta_arm_cur), 0.0], dtype=np.float64)
                 self._clock_u_tangential = np.array([-np.sin(theta_arm_cur), np.cos(theta_arm_cur), 0.0], dtype=np.float64)
                 self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                u_tool = R_r_anchor.apply([0.0, 0.0, 1.0])
+                norm_tool = float(np.linalg.norm(u_tool))
+                self._clock_u_tool = (u_tool / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0])
 
             if self.rotation_mode in ("task_aligned", "task_invariant") or (self.rotation_mode != "decoupled_3axis" and self.nav_mode in ("task_aligned", "clock_face")):
                 u_tool_axis = self._clock_u_tool if self._clock_u_tool is not None else R_r_anchor.apply([0.0, 0.0, 1.0])

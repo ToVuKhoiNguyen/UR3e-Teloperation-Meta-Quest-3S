@@ -129,7 +129,7 @@ class SafetyGate:
         else:
             self._solver = solver
 
-    def check(self, q: Optional[List[float]]) -> Dict[str, Any]:
+    def check(self, q: Optional[List[float]], cached_collision: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if q is None:
             return {"pass": False, "reason": "IK failed", "sigma_min": 0.0, "damping": 0.0}
 
@@ -155,36 +155,41 @@ class SafetyGate:
                 os.environ.get("DISABLE_SELF_COLLISION", "0").lower() in ("1", "true", "yes")
             )
             if not disable_coll:
-                chk_func = getattr(self._solver, "check_self_collision", getattr(self._solver, "check_camera_self_collision", None))
-                if chk_func is not None:
-                    try:
-                        coll_thresh = getattr(self._solver, "clearance_threshold", 0.01)
-                        coll_chk = chk_func(q, clearance_threshold=coll_thresh)
-                        if not coll_chk["safe"]:
-                            link_a = coll_chk.get("link_a", "link_a")
-                            link_b = coll_chk.get("link_b", "link_b")
-                            return {
-                                "pass": False,
-                                "reason": f"self_collision({link_a} <-> {link_b}: {coll_chk['min_dist']*1000:.1f}mm <= {coll_thresh*1000:.1f}mm)",
-                                "sigma_min": 0.0,
-                                "damping": 0.0
-                            }
-                    except Exception:
-                        pass
-
-        # Strict Table armor check (WYSIWYG 0.0mm threshold)
-        if self._solver is not None and hasattr(self._solver, "check_table_collision"):
-            try:
-                tbl_chk = self._solver.check_table_collision(q, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
-                if not tbl_chk["safe"]:
+                coll_chk = cached_collision.get("self_chk") if cached_collision is not None else None
+                if coll_chk is None:
+                    chk_func = getattr(self._solver, "check_self_collision", getattr(self._solver, "check_camera_self_collision", None))
+                    if chk_func is not None:
+                        try:
+                            coll_thresh = getattr(self._solver, "clearance_threshold", 0.01)
+                            coll_chk = chk_func(q, clearance_threshold=coll_thresh)
+                        except Exception:
+                            coll_chk = None
+                if coll_chk is not None and not coll_chk.get("safe", True):
+                    link_a = coll_chk.get("link_a", "link_a")
+                    link_b = coll_chk.get("link_b", "link_b")
+                    coll_thresh = getattr(self._solver, "clearance_threshold", 0.01)
                     return {
                         "pass": False,
-                        "reason": f"table_collision({tbl_chk['violator']} <-> Table Armor: {tbl_chk['clearance_cm']*10:.1f}mm <= 0.0mm)",
+                        "reason": f"self_collision({link_a} <-> {link_b}: {coll_chk['min_dist']*1000:.1f}mm <= {coll_thresh*1000:.1f}mm)",
                         "sigma_min": 0.0,
                         "damping": 0.0
                     }
-            except Exception:
-                pass
+
+        # Strict Table armor check (WYSIWYG 0.0mm threshold)
+        if self._solver is not None:
+            tbl_chk = cached_collision.get("tbl_chk") if cached_collision is not None else None
+            if tbl_chk is None and hasattr(self._solver, "check_table_collision"):
+                try:
+                    tbl_chk = self._solver.check_table_collision(q, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
+                except Exception:
+                    tbl_chk = None
+            if tbl_chk is not None and not tbl_chk.get("safe", True):
+                return {
+                    "pass": False,
+                    "reason": f"table_collision({tbl_chk['violator']} <-> Table Armor: {tbl_chk['clearance_cm']*10:.1f}mm <= 0.0mm)",
+                    "sigma_min": 0.0,
+                    "damping": 0.0
+                }
 
         # Singularity Guard sigma check: Smooth continuous damping instead of hard binary cutoff
         sigma = 1.0
@@ -364,6 +369,7 @@ class TeleoperationController:
         # Second-order smooth tracking states
         self._smoothed_pos: Optional[np.ndarray] = None
         self._smoothed_quat: Optional[np.ndarray] = None
+        self._prev_linear_vel: np.ndarray = np.zeros(3, dtype=float)
         self._prev_dq: np.ndarray = np.zeros(6, dtype=float)
         self._was_clutch_released: bool = True
         self._arm_anchor_q: Optional[np.ndarray] = None
@@ -390,8 +396,11 @@ class TeleoperationController:
                     fk = self._solver.fk(self._last_valid_q)
                     self._smoothed_pos = np.array(fk["pos"], dtype=float)
                     self._smoothed_quat = np.array(fk["quat"], dtype=float)
+                    if hasattr(self._solver, "reset_smoothing"):
+                        self._solver.reset_smoothing(self._smoothed_pos)
                 except Exception:
                     pass
+            self._prev_linear_vel = np.zeros(3, dtype=float)
             self._prev_dq = np.zeros(6, dtype=float)
             with self._lock:
                 self._status = "OK"
@@ -401,7 +410,10 @@ class TeleoperationController:
                 self._exec.disconnect()
             self._smoothed_pos = None
             self._smoothed_quat = None
+            self._prev_linear_vel = np.zeros(3, dtype=float)
             self._prev_dq = np.zeros(6, dtype=float)
+            if hasattr(self._solver, "reset_smoothing"):
+                self._solver.reset_smoothing(None)
             with self._lock:
                 self._status = "OK"
                 self._last_logged_status = "OK"
@@ -412,6 +424,7 @@ class TeleoperationController:
         self._arm_anchor_q = None
         self._arm_anchor_p = None
         self._rot_anchor_body_q = None
+        self._prev_linear_vel = np.zeros(3, dtype=float)
         self._prev_dq = np.zeros(6, dtype=float)
         with self._lock:
             self._status = "OK"
@@ -422,12 +435,16 @@ class TeleoperationController:
                 fk = self._solver.fk(q_init)
                 self._smoothed_pos = np.array(fk["pos"], dtype=float)
                 self._smoothed_quat = np.array(fk["quat"], dtype=float)
+                if hasattr(self._solver, "reset_smoothing"):
+                    self._solver.reset_smoothing(self._smoothed_pos)
             except Exception:
                 self._smoothed_pos = None
                 self._smoothed_quat = None
         else:
             self._smoothed_pos = None
             self._smoothed_quat = None
+            if hasattr(self._solver, "reset_smoothing"):
+                self._solver.reset_smoothing(None)
 
     def notify_clutch_released(self, q_current: Optional[List[float]] = None):
         """
@@ -446,8 +463,11 @@ class TeleoperationController:
                     fk = self._solver.fk(q_ref)
                     self._smoothed_pos = np.array(fk["pos"], dtype=float)
                     self._smoothed_quat = np.array(fk["quat"], dtype=float)
+                    if hasattr(self._solver, "reset_smoothing"):
+                        self._solver.reset_smoothing(self._smoothed_pos)
                 except Exception:
                     pass
+        self._prev_linear_vel = np.zeros(3, dtype=float)
         self._prev_dq = np.zeros(6, dtype=float)
         self._smoothed_damping = 1.0
 
@@ -802,13 +822,14 @@ class TeleoperationController:
                 self._arm_anchor_p = None
                 self._rot_anchor_body_q = None
 
-        # ── 3. High-Responsiveness Target Low-Pass Filter (Input Smoothing) ──
-        # Responsive Cartesian EMA (BETA_POS=0.60, BETA_ROT=0.75) for smooth, solid and silky tracking
-        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.60")))
+        # ── 3. High-Responsiveness Target Low-Pass Filter (Translational EMA) ──
+        # Responsive Cartesian EMA (BETA_POS=0.55, BETA_ROT=0.75) for smooth, solid and silky tracking
+        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.55")))
         BETA_ROT = float(os.environ.get("ROT_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_ROT", "0.75")))
         if self._was_clutch_released or self._smoothed_pos is None:
             self._smoothed_pos = np.copy(raw_p)
             self._smoothed_quat = np.copy(raw_q_norm)
+            self._prev_linear_vel = np.zeros(3, dtype=float)
             self._prev_dq = np.zeros(6, dtype=float)
             self._was_clutch_released = False
         else:
@@ -823,8 +844,8 @@ class TeleoperationController:
             self._smoothed_quat = BETA_ROT * raw_q_norm + (1.0 - BETA_ROT) * self._smoothed_quat
             self._smoothed_quat /= max(1e-6, np.linalg.norm(self._smoothed_quat))
 
-        # Snap to exact target when close to eliminate asymptotic residual error (Zero Steady-State Error)
-        if np.linalg.norm(raw_p - self._smoothed_pos) < 0.0005:  # < 0.5mm
+        # Snap to exact target when close (< 0.1mm) to eliminate asymptotic residual error (Zero Steady-State Error)
+        if np.linalg.norm(raw_p - self._smoothed_pos) < 0.0001:  # < 0.1mm
             self._smoothed_pos = np.copy(raw_p)
 
         cos_half = min(1.0, max(-1.0, abs(float(np.dot(self._smoothed_quat, raw_q_norm)))))
@@ -834,17 +855,52 @@ class TeleoperationController:
         p_target = self._smoothed_pos
         q_target_wxyz = self._smoothed_quat
 
-        # ── 4. Position Leash: L_step = 80mm in normal space, shortens smoothly in singularity ──
+        # ── 4. Continuous Slew-Rate Limiter for Linear Velocity ──
+        # Replaces blunt hard-clamping with continuous C1 acceleration / deceleration S-curve profile
+        V_MAX_LIN = float(os.environ.get("MAX_LINEAR_VEL", "0.45"))   # 0.45 m/s (~22.5mm/step at 20Hz)
+        A_MAX_LIN = float(os.environ.get("MAX_LINEAR_ACC", "2.2"))    # 2.2 m/s^2 (~0.11 m/s velocity ramp per step)
+
+        # Scale velocity down smoothly when near singularities
+        v_max_lin_eff = float(V_MAX_LIN * (1.0 - 0.40 * sing_alpha))
+        a_max_lin_eff = float(A_MAX_LIN * (1.0 - 0.30 * sing_alpha))
+
         vec_p = p_target - p_curr
         dist_p = float(np.linalg.norm(vec_p))
-        BASE_P_LEASH = float(os.environ.get("MAX_P_LEASH", "0.080"))       # 80mm leash (1.6 m/s, đầm chắc mượt mà)
-        SING_P_LEASH = float(os.environ.get("SING_P_LEASH", "0.035"))      # 35mm in singularity
-        max_p_leash = float(BASE_P_LEASH - (BASE_P_LEASH - SING_P_LEASH) * sing_alpha)
 
-        if dist_p > max_p_leash:
-            p_clamped = p_curr + (vec_p / dist_p) * max_p_leash
+        if not hasattr(self, "_prev_linear_vel") or self._prev_linear_vel is None:
+            self._prev_linear_vel = np.zeros(3, dtype=float)
+
+        if dist_p < 1e-5:
+            p_clamped = np.copy(p_target)
+            self._prev_linear_vel = np.zeros(3, dtype=float)
         else:
-            p_clamped = p_target
+            dir_p = vec_p / dist_p
+            # Parabolic soft braking envelope: v_allow = sqrt(2 * a * d)
+            v_brake = math.sqrt(2.0 * a_max_lin_eff * dist_p)
+            v_desired_mag = min(v_max_lin_eff, v_brake, dist_p / self._dt)
+            v_desired = dir_p * v_desired_mag
+
+            # Slew-rate limiting: limit acceleration magnitude |delta_v| <= a_max * dt
+            delta_v = v_desired - self._prev_linear_vel
+            delta_v_mag = float(np.linalg.norm(delta_v))
+            max_delta_v = a_max_lin_eff * self._dt
+
+            if delta_v_mag > max_delta_v:
+                delta_v = delta_v * (max_delta_v / delta_v_mag)
+
+            v_cmd = self._prev_linear_vel + delta_v
+            v_cmd_mag = float(np.linalg.norm(v_cmd))
+            if v_cmd_mag > v_max_lin_eff:
+                v_cmd = v_cmd * (v_max_lin_eff / v_cmd_mag)
+
+            # Prevent overshoot past target if approaching target closely
+            step_disp = v_cmd * self._dt
+            if np.linalg.norm(step_disp) > dist_p:
+                p_clamped = np.copy(p_target)
+                self._prev_linear_vel = np.zeros(3, dtype=float)
+            else:
+                p_clamped = p_curr + step_disp
+                self._prev_linear_vel = np.copy(v_cmd)
 
         # 2. Orientation Leash: 0.45 rad (~26 deg)
         q_c_norm = q_curr_wxyz / max(1e-6, np.linalg.norm(q_curr_wxyz))
@@ -1044,9 +1100,9 @@ class TeleoperationController:
             self._apply_smooth_braking_and_send(tag, detail, q_real, eval_q, result_ik, pose)
             return
 
-        # Check multi-layer SafetyGate
+        # Check multi-layer SafetyGate (reusing cached collision checks from solver if available)
         if hasattr(self, "_gate") and self._gate is not None:
-            gate = self._gate.check(q_target)
+            gate = self._gate.check(q_target, cached_collision=result_ik)
             if not gate["pass"]:
                 reason = gate["reason"]
                 if "singularity" in reason.lower():
@@ -1074,29 +1130,39 @@ class TeleoperationController:
                     return
 
         # Forward Kinematics verification: Ensure TCP and Camera respect table armor (+0.020m)
-        if self._solver is not None and hasattr(self._solver, "check_table_collision"):
+        if result_ik.get("tbl_chk") is not None and np.allclose(q_target, result_ik.get("q", [])):
+            tbl_final = result_ik["tbl_chk"]
+        elif self._solver is not None and hasattr(self._solver, "check_table_collision"):
             try:
                 tbl_final = self._solver.check_table_collision(q_target, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
-                if not tbl_final["safe"]:
-                    detail = f"FK table boundary breach: {tbl_final['violator']} contact ({tbl_final['clearance_cm']*10:.1f}mm <= 0mm)"
-                    self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
-                    self._apply_smooth_braking_and_send("ENV COLLISION", detail, q_real, q_target, result_ik, pose)
-                    return
             except Exception:
-                pass
+                tbl_final = {"safe": True}
+        else:
+            tbl_final = {"safe": True}
+
+        if not tbl_final.get("safe", True):
+            detail = f"FK table boundary breach: {tbl_final.get('violator', 'TCP')} contact ({tbl_final.get('clearance_cm', 0.0)*10:.1f}mm <= 0mm)"
+            self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
+            self._apply_smooth_braking_and_send("ENV COLLISION", detail, q_real, q_target, result_ik, pose)
+            return
 
         # Final Self-Collision verification: Ensure arm and camera armor respect 1.0cm clearance
-        if self._solver is not None and hasattr(self._solver, "check_self_collision"):
+        if result_ik.get("self_chk") is not None and np.allclose(q_target, result_ik.get("q", [])):
+            self_final = result_ik["self_chk"]
+        elif self._solver is not None and hasattr(self._solver, "check_self_collision"):
             try:
                 coll_thresh = getattr(self._solver, "clearance_threshold", 0.01)
                 self_final = self._solver.check_self_collision(q_target, clearance_threshold=coll_thresh, verbose=False)
-                if not self_final["safe"]:
-                    detail = f"Self-collision: {self_final.get('link_a')} vs {self_final.get('link_b')} ({self_final.get('min_dist', 0.0)*1000:.1f}mm <= {coll_thresh*1000:.1f}mm)"
-                    self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
-                    self._apply_smooth_braking_and_send("SELF COLLISION", detail, q_real, q_target, result_ik, pose)
-                    return
             except Exception:
-                pass
+                self_final = {"safe": True}
+        else:
+            self_final = {"safe": True}
+
+        if not self_final.get("safe", True):
+            detail = f"Self-collision: {self_final.get('link_a')} vs {self_final.get('link_b')} ({self_final.get('min_dist', 0.0)*1000:.1f}mm <= {getattr(self._solver, 'clearance_threshold', 0.01)*1000:.1f}mm)"
+            self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
+            self._apply_smooth_braking_and_send("SELF COLLISION", detail, q_real, q_target, result_ik, pose)
+            return
 
         # Send command to robot via servoJ
         self._exec.send(q_target)
@@ -1111,8 +1177,8 @@ class TeleoperationController:
             except Exception:
                 sing_info = None
 
-        tbl_chk = self._solver.check_table_collision(q_target, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
-        self_chk = self._solver.check_self_collision(q_target, verbose=False)
+        tbl_chk = tbl_final
+        self_chk = self_final
 
         is_near_sing = bool(sing_info and sing_info.get("singular", False))
         sing_types = sing_info.get("types", []) if sing_info else []
