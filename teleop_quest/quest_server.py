@@ -83,8 +83,8 @@ class QuestServer:
     def get_frame(self):
         with self._lock:
             if self._latest_frame is not None:
-                # Watchdog an toàn: nếu mất kết nối/delay gói tin quá 150ms, tự động nhả cò và các nút
-                if time.time() - self._last_seen > 0.15:
+                # Watchdog an toàn: nếu mất kết nối/delay gói tin quá 350ms, tự động nhả cò và các nút
+                if time.time() - self._last_seen > 0.35:
                     safe_frame = dict(self._latest_frame)
                     safe_frame["trigger"] = False
                     safe_frame["grip"] = False
