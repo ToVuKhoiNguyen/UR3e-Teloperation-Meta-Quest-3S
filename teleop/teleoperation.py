@@ -328,7 +328,9 @@ class ServoJExecutor:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 4: Teleoperation Controller
-# ─────────────────────────────────────────────────────────────────────────────
+_DEFAULT_FETCH_POSE = object()
+
+
 class TeleoperationController:
     """
     Main 20Hz teleoperation loop coordinating PoseSource, PyRoki IK, SafetyGate, and ServoJ.
@@ -693,18 +695,19 @@ class TeleoperationController:
 
         return {"success": True, "status": status_tag, "q": q_next, "fk": fk_now}
 
-    def step(self, q_real: List[float], pose: Optional[Union[dict, tuple]] = None):
+    def step(self, q_real: List[float], pose: Any = _DEFAULT_FETCH_POSE):
         """
         One 20Hz control cycle.
         Input:  q_real list[6 rad] - actual joint angles from RTDE Port 30004
-                pose dict/tuple (optional) - target pose from PoseSource
+                pose dict/tuple (optional) - target pose from PoseSource (if explicitly None, holds robot stationary)
         """
         if not self._enabled:
             return
 
-        # Fetch target pose and clamp to workspace virtual envelope
-        if pose is None:
-            pose = self._pose.get_pose()
+        # Fetch target pose if not explicitly provided
+        if pose is _DEFAULT_FETCH_POSE:
+            pose = self._pose.get_pose() if self._pose is not None else None
+
         if pose is None:
             self.notify_clutch_released(q_real)
             q_hold = self._last_valid_q if self._last_valid_q is not None else q_real
@@ -800,8 +803,8 @@ class TeleoperationController:
                 self._rot_anchor_body_q = None
 
         # ── 3. High-Responsiveness Target Low-Pass Filter (Input Smoothing) ──
-        # Responsive Cartesian EMA (BETA_POS=0.85, BETA_ROT=0.75) for fast, lag-free and silky tracking
-        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.85")))
+        # Responsive Cartesian EMA (BETA_POS=0.60, BETA_ROT=0.75) for smooth, solid and silky tracking
+        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.60")))
         BETA_ROT = float(os.environ.get("ROT_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_ROT", "0.75")))
         if self._was_clutch_released or self._smoothed_pos is None:
             self._smoothed_pos = np.copy(raw_p)
@@ -831,10 +834,10 @@ class TeleoperationController:
         p_target = self._smoothed_pos
         q_target_wxyz = self._smoothed_quat
 
-        # ── 4. Position Leash: L_step = 150mm in normal space, shortens smoothly in singularity ──
+        # ── 4. Position Leash: L_step = 80mm in normal space, shortens smoothly in singularity ──
         vec_p = p_target - p_curr
         dist_p = float(np.linalg.norm(vec_p))
-        BASE_P_LEASH = float(os.environ.get("MAX_P_LEASH", "0.150"))       # 150mm leash (+25% responsiveness)
+        BASE_P_LEASH = float(os.environ.get("MAX_P_LEASH", "0.080"))       # 80mm leash (1.6 m/s, đầm chắc mượt mà)
         SING_P_LEASH = float(os.environ.get("SING_P_LEASH", "0.035"))      # 35mm in singularity
         max_p_leash = float(BASE_P_LEASH - (BASE_P_LEASH - SING_P_LEASH) * sing_alpha)
 
@@ -942,9 +945,9 @@ class TeleoperationController:
                     return
 
                 # Joint Acceleration / Slew-Rate Limiter (Second-Order Smooth Tracking with Soft Braking)
-                A_MAX_BASE = float(os.environ.get("MAX_JOINT_ACC", "0.075"))
-                A_MAX = A_MAX_BASE * 1.5 if (delta_p_req > 0.003 or delta_rot_req > 0.02) else A_MAX_BASE
-                V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.25"))    # 0.25 rad/step   (= 5.0 rad/s at 20Hz)
+                A_MAX_BASE = float(os.environ.get("MAX_JOINT_ACC", "0.045"))
+                A_MAX = A_MAX_BASE * 1.25 if (delta_p_req > 0.003 or delta_rot_req > 0.02) else A_MAX_BASE
+                V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.080"))    # 0.080 rad/step (= 1.6 rad/s at 20Hz, đầm chắc mượt mà)
 
                 # Continuous smooth damping ramp for singularities:
                 raw_damping = 1.0 - 0.30 * (sing_alpha * sing_alpha * (3.0 - 2.0 * sing_alpha))
@@ -1003,8 +1006,8 @@ class TeleoperationController:
 
                 self._prev_dq = limited_dq
 
-                # Optional Joint-Space Smoothing: preserve exact acceleration continuity
-                ALPHA_Q = float(os.environ.get("JOINT_SMOOTH_ALPHA", "1.0"))
+                # Joint-Space Smoothing: preserve exact acceleration continuity and eliminate 20Hz discrete jitter
+                ALPHA_Q = float(os.environ.get("JOINT_SMOOTH_ALPHA", "0.80"))
                 if ALPHA_Q < 0.999 and self._last_valid_q is not None and not self._was_clutch_released:
                     q_target = [
                         ALPHA_Q * q_target[i] + (1.0 - ALPHA_Q) * self._last_valid_q[i]
