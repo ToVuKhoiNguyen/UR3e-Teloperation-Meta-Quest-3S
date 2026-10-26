@@ -1,11 +1,14 @@
 import asyncio
 import http.server
 import json
+import math
 import os
 import queue
 import ssl
 import threading
 import time
+import traceback
+import urllib.parse
 import websockets
 
 class QuestServer:
@@ -41,6 +44,7 @@ class QuestServer:
         self._estop_triggered = False
         self._home_requested = False
         self._gripper_toggle_requested = False
+        self._record_toggle_requested = False
         self._latest_jpeg = None
         self._drive_mode = False
         self._latest_telemetry_bytes = None
@@ -54,6 +58,12 @@ class QuestServer:
         self._prev_trigger = False
         self._latest_q0 = None
         self._q0_provider = None
+
+        # Interactive Joint-Space Control (Cockpit Sliders / Arrows / Direct Input)
+        self._cockpit_jog_time = 0.0
+        self._cockpit_target_joints = None
+        self._cockpit_jog_lock = threading.Lock()
+        self._cockpit_active_joint = -1
 
     def start(self):
         # Khởi động HTTPS server (chạy daemon thread)
@@ -84,6 +94,10 @@ class QuestServer:
                     safe_frame["gripper_toggle_btn"] = False
                     return safe_frame
             return self._latest_frame
+
+    def get_controller_frame(self):
+        """Alias tương thích ngược cho get_frame()"""
+        return self.get_frame()
 
     @property
     def last_frame(self):
@@ -136,6 +150,13 @@ class QuestServer:
                 return True
             return False
 
+    def check_and_clear_record_toggle(self) -> bool:
+        with self._lock:
+            if getattr(self, "_record_toggle_requested", False):
+                self._record_toggle_requested = False
+                return True
+            return False
+
     def send_haptic(self, intensity: float = 1.0, duration: float = 100):
         with self._lock:
             clients = list(self._clients)
@@ -148,7 +169,62 @@ class QuestServer:
                 except Exception:
                     pass
 
-    def broadcast_robot_telemetry(self, pos: list = None, quat: list = None, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None, scale: float = None):
+    # =========================================================================
+    # Interactive Joint-Space Control Handlers (Quest Cockpit)
+    # =========================================================================
+    def handle_cockpit_joint_cmd(self, joint_idx: int, target_rad: float):
+        """Đặt góc khớp mục tiêu (radian) cho khớp joint_idx từ Cockpit (Slider / Direct Degree)."""
+        with self._cockpit_jog_lock:
+            if self._cockpit_target_joints is None:
+                if self._latest_telemetry_dict and "joints" in self._latest_telemetry_dict:
+                    self._cockpit_target_joints = [float(j) for j in self._latest_telemetry_dict["joints"]]
+                else:
+                    self._cockpit_target_joints = [0.0] * 6
+            if 0 <= joint_idx < len(self._cockpit_target_joints):
+                self._cockpit_target_joints[joint_idx] = float(target_rad)
+                self._cockpit_active_joint = joint_idx
+                self._cockpit_jog_time = time.time()
+
+    def handle_cockpit_joint_jog(self, joint_idx: int, delta_rad: float):
+        """Tăng/giảm góc khớp mục tiêu (radian) cho khớp joint_idx từ Cockpit (Nút mũi tên xanh)."""
+        with self._cockpit_jog_lock:
+            if self._cockpit_target_joints is None:
+                if self._latest_telemetry_dict and "joints" in self._latest_telemetry_dict:
+                    self._cockpit_target_joints = [float(j) for j in self._latest_telemetry_dict["joints"]]
+                else:
+                    self._cockpit_target_joints = [0.0] * 6
+            if 0 <= joint_idx < len(self._cockpit_target_joints):
+                self._cockpit_target_joints[joint_idx] += float(delta_rad)
+                self._cockpit_active_joint = joint_idx
+                self._cockpit_jog_time = time.time()
+
+    def handle_cockpit_joints_cmd(self, target_joints: list):
+        """Đặt toàn bộ 6 góc khớp mục tiêu (radian) từ Cockpit."""
+        with self._cockpit_jog_lock:
+            self._cockpit_target_joints = [float(j) for j in target_joints[:6]]
+            self._cockpit_active_joint = -1
+            self._cockpit_jog_time = time.time()
+
+    def is_cockpit_jogging(self, timeout: float = 0.45) -> bool:
+        """Kiểm tra người dùng có đang tương tác với bảng Joint Position trên Cockpit hay không."""
+        with self._cockpit_jog_lock:
+            return (time.time() - self._cockpit_jog_time) < timeout
+
+    def get_cockpit_target_joints(self):
+        """Lấy vector 6 góc khớp mục tiêu do Cockpit yêu cầu."""
+        with self._cockpit_jog_lock:
+            if self._cockpit_target_joints is not None:
+                return list(self._cockpit_target_joints)
+            return None
+
+    def sync_cockpit_joints(self, q_real: list):
+        """Đồng bộ vị trí khớp thực tế vào mốc Cockpit khi người dùng KHÔNG tương tác."""
+        with self._cockpit_jog_lock:
+            if (time.time() - self._cockpit_jog_time) >= 0.45 and q_real is not None:
+                self._cockpit_target_joints = [float(q) for q in q_real[:6]]
+                self._cockpit_active_joint = -1
+
+    def broadcast_robot_telemetry(self, pos: list = None, quat: list = None, status: str = "OK", gripper: bool = False, joints: list = None, tcp_pose: list = None, scale: float = None, recording: bool = None):
         """Phát tọa độ TCP thực tế, quaternion và trạng thái robot + VR controller tới WebXR Cockpit HUD."""
         with self._lock:
             clients = list(self._clients)
@@ -193,12 +269,15 @@ class QuestServer:
         elif cached_dict and "scale" in cached_dict:
             cur_scale = float(cached_dict["scale"])
 
+        is_rec = bool(recording) if recording is not None else (bool(cached_dict.get("recording", False)) if cached_dict else False)
+
         msg_dict = {
             "type": "robot_telemetry",
             "pos": [round(float(p), 4) for p in pos] if pos is not None else [0.0, 0.0, 0.0],
             "quat": [round(float(q), 4) for q in quat] if quat is not None else [1.0, 0.0, 0.0, 0.0],
             "status": str(status),
             "gripper": bool(gripper),
+            "recording": is_rec,
             "scale": cur_scale,
             "controller": controller_info
         }
@@ -225,11 +304,23 @@ class QuestServer:
                 except Exception:
                     pass
 
+    def broadcast_reset_session(self):
+        """Yêu cầu tất cả client WebXR dọn dẹp và reset session bị treo (zombie session)."""
+        with self._lock:
+            clients = list(self._clients)
+            loop = self._loop
+        if clients and loop:
+            msg = json.dumps({"type": "reset_session"})
+            for ws in clients:
+                try:
+                    asyncio.run_coroutine_threadsafe(ws.send(msg), loop)
+                except Exception:
+                    pass
+
     def send_camera_frame(self, frame_rgb, quality: int = 85):
-        """Mã hóa frame ảnh RGB thành JPEG, lưu cache đĩa và gửi tới client qua WebSocket & MJPEG Stream."""
+        """Mã hóa frame ảnh RGB thành JPEG lưu RAM buffer phục vụ HTTP MJPEG / Snapshot Stream không lag."""
         try:
             import cv2
-            import base64
             # Giữ nguyên độ phân giải gốc sắc nét của camera (640x480 hoặc 1280x480 side-by-side)
             # Chỉ nén lại nếu kích thước chiều ngang vượt quá 1280px để bảo toàn băng thông
             h_f, w_f = frame_rgb.shape[:2]
@@ -246,28 +337,10 @@ class QuestServer:
                 jpeg_bytes = encimg.tobytes()
                 with self._lock:
                     self._latest_jpeg = jpeg_bytes
-                    clients = list(self._clients)
-                    loop = self._loop
                     self._frame_cond.notify_all()
 
-                # Lưu ảnh trực tiếp ra static/wrist_camera.jpg phục vụ chế độ xem file:/// cục bộ
-                try:
-                    tmp_file = self._cam_file + ".tmp"
-                    with open(tmp_file, "wb") as f:
-                        f.write(jpeg_bytes)
-                    os.replace(tmp_file, self._cam_file)
-                except Exception:
-                    pass
-
-                # Phát luồng trực tiếp qua WebSocket tới các client đang kết nối
-                if clients and loop:
-                    b64_str = base64.b64encode(jpeg_bytes).decode('utf-8')
-                    msg = json.dumps({"type": "camera", "image": b64_str})
-                    for ws in clients:
-                        try:
-                            asyncio.run_coroutine_threadsafe(ws.send(msg), loop)
-                        except Exception:
-                            pass
+                # Lưu ảnh JPEG trong bộ nhớ RAM (self._latest_jpeg) phục vụ HTTP MJPEG Stream (/video_feed)
+                # Loại bỏ hoàn toàn Disk I/O và không nhồi Base64 vào WebSocket để giữ kênh điều khiển độ trễ cực thấp (< 2ms)
         except Exception:
             pass
 
@@ -399,11 +472,86 @@ class QuestServer:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Access-Control-Allow-Origin", "*")
+                if req_path == "/api/joint_cmd":
+                    query_str = self.path.split("?")[1] if "?" in self.path else ""
+                    params = dict(urllib.parse.parse_qsl(query_str))
+                    if "joint" in params:
+                        try:
+                            j_idx = int(params["joint"])
+                            if "rad" in params:
+                                server_self.handle_cockpit_joint_cmd(j_idx, float(params["rad"]))
+                            elif "deg" in params:
+                                server_self.handle_cockpit_joint_cmd(j_idx, math.radians(float(params["deg"])))
+                        except Exception:
+                            pass
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(b'{"status": "ok"}')
+                    return
+
+                if req_path == "/api/joint_jog":
+                    query_str = self.path.split("?")[1] if "?" in self.path else ""
+                    params = dict(urllib.parse.parse_qsl(query_str))
+                    if "joint" in params:
+                        try:
+                            j_idx = int(params["joint"])
+                            if "delta_rad" in params:
+                                server_self.handle_cockpit_joint_jog(j_idx, float(params["delta_rad"]))
+                            elif "delta_deg" in params:
+                                server_self.handle_cockpit_joint_jog(j_idx, math.radians(float(params["delta_deg"])))
+                        except Exception:
+                            pass
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     self.wfile.write(b'{"status": "ok"}')
                     return
 
                 super().do_GET()
+
+            def do_POST(self):
+                req_path = self.path.split("?")[0]
+                if req_path in ("/api/joint_cmd", "/api/joint_jog", "/api/toggle_gripper"):
+                    content_len = int(self.headers.get("Content-Length", 0))
+                    post_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
+                    try:
+                        data = json.loads(post_body.decode("utf-8")) if post_body else {}
+                    except Exception:
+                        data = {}
+
+                    if req_path == "/api/joint_cmd":
+                        if "joints" in data and isinstance(data["joints"], list):
+                            server_self.handle_cockpit_joints_cmd([float(x) for x in data["joints"]])
+                        elif "joints_deg" in data and isinstance(data["joints_deg"], list):
+                            server_self.handle_cockpit_joints_cmd([math.radians(float(x)) for x in data["joints_deg"]])
+                        elif "joint" in data:
+                            j_idx = int(data["joint"])
+                            if "rad" in data:
+                                server_self.handle_cockpit_joint_cmd(j_idx, float(data["rad"]))
+                            elif "deg" in data:
+                                server_self.handle_cockpit_joint_cmd(j_idx, math.radians(float(data["deg"])))
+                    elif req_path == "/api/joint_jog":
+                        if "joint" in data:
+                            j_idx = int(data["joint"])
+                            if "delta_rad" in data:
+                                server_self.handle_cockpit_joint_jog(j_idx, float(data["delta_rad"]))
+                            elif "delta_deg" in data:
+                                server_self.handle_cockpit_joint_jog(j_idx, math.radians(float(data["delta_deg"])))
+                    elif req_path == "/api/toggle_gripper":
+                        with server_self._lock:
+                            server_self._gripper_toggle_requested = True
+
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(b'{"status": "ok"}')
+                    return
+
+                super().do_POST()
 
             def log_message(self, format, *args):
                 pass  # Tắt log mặc định để tránh spam terminal
@@ -462,6 +610,24 @@ class QuestServer:
                                 self._drive_mode = True
                             elif data.get("type") == "toggle_gripper":
                                 self._gripper_toggle_requested = True
+                            elif data.get("type") == "joint_cmd":
+                                if "joints" in data and isinstance(data["joints"], list):
+                                    self.handle_cockpit_joints_cmd([float(x) for x in data["joints"]])
+                                elif "joints_deg" in data and isinstance(data["joints_deg"], list):
+                                    self.handle_cockpit_joints_cmd([math.radians(float(x)) for x in data["joints_deg"]])
+                                elif "joint" in data:
+                                    j_idx = int(data["joint"])
+                                    if "rad" in data:
+                                        self.handle_cockpit_joint_cmd(j_idx, float(data["rad"]))
+                                    elif "deg" in data:
+                                        self.handle_cockpit_joint_cmd(j_idx, math.radians(float(data["deg"])))
+                            elif data.get("type") == "joint_jog":
+                                if "joint" in data:
+                                    j_idx = int(data["joint"])
+                                    if "delta_rad" in data:
+                                        self.handle_cockpit_joint_jog(j_idx, float(data["delta_rad"]))
+                                    elif "delta_deg" in data:
+                                        self.handle_cockpit_joint_jog(j_idx, math.radians(float(data["delta_deg"])))
                             else:
                                 self._latest_frame = data
                                 self._last_seen = time.time()
@@ -470,6 +636,8 @@ class QuestServer:
                                     self._drive_mode = bool(data["drive_mode"])
                                 if data.get("gripper_toggle_btn"):
                                     self._gripper_toggle_requested = True
+                                if data.get("record_toggle_btn"):
+                                    self._record_toggle_requested = True
                                 # Đồng bộ tức thời trạng thái tay cầm vào telemetry cache để HTTP polling cập nhật nhạy
                                 if self._latest_telemetry_dict is not None:
                                     raw_h = data.get("hand", "right")
@@ -559,6 +727,9 @@ class QuestServer:
                 "gripper_raw": bool(data.get("gripper_raw", False)),
                 "gripper_btn": bool(data.get("gripper_btn", False)),
                 "button_a": bool(data.get("button_a", False)),
+                "record_btn": bool(data.get("record_btn", False)),
+                "record_toggle_btn": bool(data.get("record_toggle_btn", False)),
+                "button_x": bool(data.get("button_x", False)),
                 "button_b": bool(data.get("button_b", False)),
                 "thumbstick": bool(data.get("thumbstick", False)),
                 "thumbstick_click": bool(data.get("thumbstick_click", False)),
