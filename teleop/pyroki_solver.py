@@ -60,9 +60,9 @@ UR3E_LIMITS = [
     (-math.pi, math.pi),          # shoulder_pan_joint:  [-180, +180]
     (-2.65, 0.20),                # shoulder_lift_joint: [-151.8, +11.5] (extended tilt range)
     (-0.08, 3.00),                 # elbow_joint:         [-4.6, +171.8] (safe range, allows straight arm down to -0.86° / -0.015 rad)
-    (-math.pi, math.pi),          # wrist_1_joint:       [-180, +180] (100% free, protected by skin-tight collision)
-    (-math.pi, math.pi),          # wrist_2_joint:       [-180, +180] (100% free, protected by skin-tight collision)
-    (-math.pi, math.pi),          # wrist_3_joint:       [-180, +180] (100% free)
+    (-2.95, 2.95),                # wrist_1_joint:       [-169°, +169°] (chống xoắn gập camera/mount)
+    (-2.95, 2.95),                # wrist_2_joint:       [-169°, +169°] (chống xoắn gập camera/mount)
+    (-3.05, 3.05),                # wrist_3_joint:       [-175°, +175°] (chống vặn cáp camera)
 ]
 
 
@@ -966,6 +966,12 @@ class PyrokiIKSolver:
             # Bảo vệ khớp khuỷu (elbow) gần 0 rad để triệt tiêu branch-flip và nổ Jacobian
             if abs(ref_seed[2]) < 0.08:
                 dq_clamped[2] = np.clip(delta_q_raw[2], -0.06, 0.06)
+
+            # Giới hạn bước nhảy góc xoay cổ tay per-frame để triệt tiêu hoàn toàn giật cục và xoắn gập:
+            MAX_WRIST_STEP = float(os.environ.get("MAX_WRIST_STEP", "0.14"))  # rad/step (~8.0°/step)
+            dq_clamped[3] = np.clip(delta_q_raw[3], -MAX_WRIST_STEP, MAX_WRIST_STEP)
+            dq_clamped[4] = np.clip(delta_q_raw[4], -MAX_WRIST_STEP, MAX_WRIST_STEP)
+            dq_clamped[5] = np.clip(delta_q_raw[5], -MAX_WRIST_STEP, MAX_WRIST_STEP)
 
             # Khi đang ở chế độ xoay thuần túy hoặc có Arm Anchor:
             # Kẹp chặt bước nhảy per-frame của thân máy để chống giật
