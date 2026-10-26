@@ -782,11 +782,8 @@ class TeleoperationController:
             # B) Pure rotation intent (VR Grip without Trigger, or Gizmo rotation while position is stationary):
             if (is_source_pure_rot or is_grip_rot) and not is_source_translating:
                 is_pure_rotation = True
-            elif self._arm_anchor_q is not None:
+            elif self._arm_anchor_q is not None and not is_source_translating:
                 # Already locked in pure rotation mode, maintain anchor until target translated >= 3mm
-                is_pure_rotation = True
-            elif delta_rot_req > 0.010 and (self._smoothed_pos is None or np.linalg.norm(user_cmd_p - self._smoothed_pos) < TRANSLATION_RELEASE_THRESH):
-                # Detected start of pure rotation in Gizmo (target orientation changing while position is stationary)
                 is_pure_rotation = True
             else:
                 is_pure_rotation = False
@@ -802,10 +799,10 @@ class TeleoperationController:
                 self._arm_anchor_p = None
                 self._rot_anchor_body_q = None
 
-        # ── 3. Second-Order Target Low-Pass Filter (Input Smoothing) ──
-        # Balanced Cartesian EMA (BETA_POS=0.75, BETA_ROT=0.50) for silk-smooth tracking without jerk
-        BETA_POS = float(os.environ.get("TARGET_FILTER_BETA_POS", "0.75"))
-        BETA_ROT = float(os.environ.get("TARGET_FILTER_BETA_ROT", "0.50"))
+        # ── 3. High-Responsiveness Target Low-Pass Filter (Input Smoothing) ──
+        # Responsive Cartesian EMA (BETA_POS=0.85, BETA_ROT=0.75) for fast, lag-free and silky tracking
+        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.85")))
+        BETA_ROT = float(os.environ.get("ROT_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_ROT", "0.75")))
         if self._was_clutch_released or self._smoothed_pos is None:
             self._smoothed_pos = np.copy(raw_p)
             self._smoothed_quat = np.copy(raw_q_norm)
@@ -834,10 +831,10 @@ class TeleoperationController:
         p_target = self._smoothed_pos
         q_target_wxyz = self._smoothed_quat
 
-        # ── 4. Position Leash: L_step = 120mm (+50%) in normal space, shortens smoothly in singularity ──
+        # ── 4. Position Leash: L_step = 150mm in normal space, shortens smoothly in singularity ──
         vec_p = p_target - p_curr
         dist_p = float(np.linalg.norm(vec_p))
-        BASE_P_LEASH = float(os.environ.get("MAX_P_LEASH", "0.120"))       # 120mm leash
+        BASE_P_LEASH = float(os.environ.get("MAX_P_LEASH", "0.150"))       # 150mm leash (+25% responsiveness)
         SING_P_LEASH = float(os.environ.get("SING_P_LEASH", "0.035"))      # 35mm in singularity
         max_p_leash = float(BASE_P_LEASH - (BASE_P_LEASH - SING_P_LEASH) * sing_alpha)
 
@@ -846,7 +843,7 @@ class TeleoperationController:
         else:
             p_clamped = p_target
 
-        # 2. Orientation Leash: 0.40 rad (100% UNCHANGED to preserve rotation feel)
+        # 2. Orientation Leash: 0.45 rad (~26 deg)
         q_c_norm = q_curr_wxyz / max(1e-6, np.linalg.norm(q_curr_wxyz))
         q_t_norm = q_target_wxyz / max(1e-6, np.linalg.norm(q_target_wxyz))
         dot_q = float(np.dot(q_c_norm, q_t_norm))
@@ -856,8 +853,8 @@ class TeleoperationController:
         dot_q = min(1.0, max(-1.0, dot_q))
         theta = float(2.0 * math.acos(dot_q))
 
-        BASE_ORI_LEASH = float(os.environ.get("MAX_ORI_LEASH", "0.40"))    # 0.40 rad (~23 deg) - UNCHANGED
-        SING_ORI_LEASH = float(os.environ.get("SING_ORI_LEASH", "0.15"))   # 0.15 rad (~8.6 deg) - UNCHANGED
+        BASE_ORI_LEASH = float(os.environ.get("MAX_ORI_LEASH", "0.45"))    # 0.45 rad (~26 deg)
+        SING_ORI_LEASH = float(os.environ.get("SING_ORI_LEASH", "0.15"))   # 0.15 rad (~8.6 deg)
         max_ori_leash = float(BASE_ORI_LEASH - (BASE_ORI_LEASH - SING_ORI_LEASH) * sing_alpha)
 
         if theta > max_ori_leash and math.sin(theta / 2.0) > 1e-4:
@@ -915,7 +912,7 @@ class TeleoperationController:
                         fk_achieved = self._solver.fk(q_target)
                         q_achieved_wxyz = np.array(fk_achieved["quat"], dtype=float)
                         self._smoothed_quat = np.copy(q_achieved_wxyz)
-                        if self._pose is not None and hasattr(self._pose, "clamp_rotation_anchor"):
+                        if self._pose is not None and hasattr(self._pose, "clamp_rotation_anchor") and not getattr(self._pose, "is_absolute", False):
                             self._pose.clamp_rotation_anchor(q_achieved_wxyz)
                     except Exception:
                         pass
@@ -945,9 +942,9 @@ class TeleoperationController:
                     return
 
                 # Joint Acceleration / Slew-Rate Limiter (Second-Order Smooth Tracking with Soft Braking)
-                A_MAX_BASE = float(os.environ.get("MAX_JOINT_ACC", "0.048"))
-                A_MAX = A_MAX_BASE * 1.5 if (delta_p_req > 0.003) else A_MAX_BASE
-                V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.22"))    # 0.22 rad/step   (= 4.4 rad/s at 20Hz)
+                A_MAX_BASE = float(os.environ.get("MAX_JOINT_ACC", "0.075"))
+                A_MAX = A_MAX_BASE * 1.5 if (delta_p_req > 0.003 or delta_rot_req > 0.02) else A_MAX_BASE
+                V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.25"))    # 0.25 rad/step   (= 5.0 rad/s at 20Hz)
 
                 # Continuous smooth damping ramp for singularities:
                 raw_damping = 1.0 - 0.30 * (sing_alpha * sing_alpha * (3.0 - 2.0 * sing_alpha))
@@ -1005,16 +1002,15 @@ class TeleoperationController:
                                                                (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
 
                 self._prev_dq = limited_dq
-            else:
-                self._prev_dq = np.zeros(6, dtype=float)
 
-            # Joint-Space EMA Smoothing: Loại bỏ hoàn toàn nhiễu rời rạc 20Hz trước khi gửi servoJ
-            ALPHA_Q = float(os.environ.get("JOINT_SMOOTH_ALPHA", "0.75"))
-            if self._last_valid_q is not None and not self._was_clutch_released:
-                q_target = [
-                    ALPHA_Q * q_target[i] + (1.0 - ALPHA_Q) * self._last_valid_q[i]
-                    for i in range(6)
-                ]
+                # Optional Joint-Space Smoothing: preserve exact acceleration continuity
+                ALPHA_Q = float(os.environ.get("JOINT_SMOOTH_ALPHA", "1.0"))
+                if ALPHA_Q < 0.999 and self._last_valid_q is not None and not self._was_clutch_released:
+                    q_target = [
+                        ALPHA_Q * q_target[i] + (1.0 - ALPHA_Q) * self._last_valid_q[i]
+                        for i in range(6)
+                    ]
+                    self._prev_dq = np.array(q_target) - np.array(self._last_valid_q)
         else:
             # IK failed / rejected: Categorize root cause
             pos = pose_clamped["pos"] if isinstance(pose_clamped, dict) else pose_clamped[0]
