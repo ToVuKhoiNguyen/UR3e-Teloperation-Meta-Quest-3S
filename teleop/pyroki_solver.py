@@ -979,6 +979,12 @@ class PyrokiIKSolver:
                 dq_clamped[0] = np.clip(delta_q_raw[0], -0.008, 0.008)
                 dq_clamped[1] = np.clip(delta_q_raw[1], -0.015, 0.015)
                 dq_clamped[2] = np.clip(delta_q_raw[2], -0.015, 0.015)
+            else:
+                # Khi đang tịnh tiến: Giới hạn bước dịch chuyển khớp thân per-frame đầm chắc, mượt mà giống bản stable-22-10
+                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.060"))  # rad/step (~3.4°/step)
+                dq_clamped[0] = np.clip(delta_q_raw[0], -MAX_BODY_STEP, MAX_BODY_STEP)
+                dq_clamped[1] = np.clip(delta_q_raw[1], -MAX_BODY_STEP, MAX_BODY_STEP)
+                dq_clamped[2] = np.clip(delta_q_raw[2], -MAX_BODY_STEP, MAX_BODY_STEP)
 
             q_candidate = (np.array(ref_seed) + dq_clamped).tolist()
 
@@ -1054,8 +1060,9 @@ class PyrokiIKSolver:
                     except Exception:
                         pass
 
-                # Continuous interpolation of s_allowed (scaled for firmer, more precise tracking)
-                s_allowed = float(0.28 - 0.08 * alpha)
+                # Continuous interpolation of s_allowed (khớp với mức độ đầm chắc, mượt mà của bản demo stable-22-10)
+                base_s = float(os.environ.get("SOLVER_S_ALLOWED", "0.10" if not is_pure_rot else "0.14"))
+                s_allowed = float(max(0.04, base_s - 0.03 * alpha))
                 branch_flip_guard = 1.60  # rad (~92 deg) - branch-flip rejection threshold
 
                 is_body_flip = float(np.max(np.abs(delta_q[:3]))) > 1.20
