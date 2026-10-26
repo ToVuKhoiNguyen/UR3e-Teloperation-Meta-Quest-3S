@@ -121,7 +121,22 @@ class DeltaPoseSource:
         self.R_tcp_origin = None
         self.prev_target_quat = None
 
-        self.max_z_rotation_delta = float(os.environ.get("MAX_Z_ROTATION_DELTA", os.environ.get("MAX_YAW_DELTA", str(math.radians(75.0)))))  # ±75° (~1.31 rad) kẹp cứng góc quay Yaw trục Z
+        # Kẹp biên độ góc quay tuyệt đối (Strict Absolute Angle Clamping) chống vặn xoắn thân máy:
+        # Hạn chế tối đa góc quay trục Z (Yaw): mặc định ±35° (~0.61 rad) để ngăn chặn hoàn toàn việc vặn xoắn thân máy
+        self.max_z_rotation_delta = float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(35.0)))))
+        self.max_roll_rotation_delta = float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(85.0))))
+        self.max_pitch_rotation_delta = float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(65.0))))
+
+        # Biến trạng thái liên tục góc (Angle Unwrapping) và chốt cố định hệ trục Clock-face
+        self._clock_u_radial = None
+        self._clock_u_tangential = None
+        self._clock_u_up = None
+        self._clock_u_tool = None
+        self._last_gesture_angle = None
+        self._last_locked_axis_idx = None
+        self._last_hand_quat_xyzw = None
+        self._prev_raw_target_quat_xyzw = None
+
         self._last_button_state = 0
         self.out_of_reach_time = 0.0
 
@@ -433,14 +448,34 @@ class DeltaPoseSource:
             self._last_dominant_rot_axis = None
             self._last_dominant_trans_axis = None
             self._last_button_state = current_button_state
+            self._last_gesture_angle = None
+            self._last_locked_axis_idx = None
+            self._prev_raw_target_quat_xyzw = None
+
+            # Chốt cố định hệ trục Clock-Face ngay tại tư thế bắt đầu (_origin_pose)
+            p_xy = self._anchor_tcp[:2]
+            r_anc_xy = float(np.hypot(p_xy[0], p_xy[1]))
+            if r_anc_xy > 0.03:
+                theta_clock = float(np.arctan2(p_xy[1], p_xy[0]))
+            elif self._anchor_theta_arm is not None:
+                theta_clock = float(self._anchor_theta_arm)
+            else:
+                theta_clock = 0.0
+            self._clock_u_radial = np.array([np.cos(theta_clock), np.sin(theta_clock), 0.0], dtype=np.float64)
+            self._clock_u_tangential = np.array([-np.sin(theta_clock), np.cos(theta_clock), 0.0], dtype=np.float64)
+            self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
             # Khởi tạo ma trận gốc cho cơ chế Grip
             try:
                 self.R_ctrl_origin = R.from_quat(self._anchor_quat_quest_xyzw)
                 self.R_tcp_origin = R.from_quat(self._anchor_quat_robot_xyzw)
+                u_tool = self.R_tcp_origin.apply([0.0, 0.0, 1.0])
+                norm_tool = float(np.linalg.norm(u_tool))
+                self._clock_u_tool = (u_tool / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0])
             except Exception:
                 self.R_ctrl_origin = None
                 self.R_tcp_origin = None
+                self._clock_u_tool = np.array([0.0, 0.0, -1.0])
 
             target_quat_wxyz = [
                 float(self._anchor_quat_robot_xyzw[3]),
@@ -448,6 +483,9 @@ class DeltaPoseSource:
                 float(self._anchor_quat_robot_xyzw[1]),
                 float(self._anchor_quat_robot_xyzw[2])
             ]
+            if hasattr(self, "_last_output_quat_wxyz") and self._last_output_quat_wxyz is not None:
+                if np.dot(target_quat_wxyz, self._last_output_quat_wxyz) < 0.0:
+                    target_quat_wxyz = [-w for w in target_quat_wxyz]
             self.prev_target_quat = target_quat_wxyz
             self._last_output_quat_wxyz = list(target_quat_wxyz)
 
@@ -718,13 +756,20 @@ class DeltaPoseSource:
             self.is_translating = bool(is_translating)
             self.is_pure_rotation = bool(not is_translating)
             curr_q = frame["quat"]
-            curr_quat_quest_xyzw = np.array([curr_q[1], curr_q[2], curr_q[3], curr_q[0]])
+            curr_quat_quest_xyzw = np.array([curr_q[1], curr_q[2], curr_q[3], curr_q[0]], dtype=np.float64)
+            norm_curr = np.linalg.norm(curr_quat_quest_xyzw)
+            if norm_curr > 1e-6:
+                curr_quat_quest_xyzw /= norm_curr
+
+            # 1. Chống lật dấu Quaternion đầu vào (Quest Controller Continuity)
+            if self._last_hand_quat_xyzw is not None:
+                if np.dot(curr_quat_quest_xyzw, self._last_hand_quat_xyzw) < 0.0:
+                    curr_quat_quest_xyzw = -curr_quat_quest_xyzw
             self._last_hand_quat_xyzw = np.copy(curr_quat_quest_xyzw)
+
             R_hand_current = R.from_quat(curr_quat_quest_xyzw)
 
-            # 1. Delta xoay trong Không gian Thực VR (WebXR World Frame):
-            # R_delta_world = R_hand_current * R_q_anchor.inv()
-            # Bắt buộc Pre-multiply để lấy trục quay trong không gian cố định của người dùng
+            # Delta xoay trong Không gian Thực VR (WebXR World Frame):
             R_delta_world = R_hand_current * R_q_anchor.inv()
             omega_world = R_delta_world.as_rotvec()
 
@@ -742,9 +787,6 @@ class DeltaPoseSource:
             w_yaw   = float(np.dot(omega_world, u_up))
 
             # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
-            # - Roll (quanh u_fwd)    -> Vặn cổ tay: w_roll
-            # - Pitch (quanh u_right) -> Cụp/ngửa cổ tay: -w_pitch
-            # - Yaw (quanh u_up)      -> Quét cổ tay trái/phải: +w_yaw
             omega_gesture = np.array([
                 w_roll,
                 -w_pitch,
@@ -761,47 +803,48 @@ class DeltaPoseSource:
                     omega_filtered = np.zeros(3, dtype=np.float64)
                 else:
                     self._locked_axis_idx = int(np.argmax(abs_w))
+                    self._last_locked_axis_idx = self._locked_axis_idx
+                    self._last_gesture_angle = float(omega_gesture[self._locked_axis_idx])
 
             if self._locked_axis_idx is not None:
                 omega_filtered = np.zeros(3, dtype=np.float64)
                 active_angle = float(omega_gesture[self._locked_axis_idx])
+
+                # Angle unwrapping: triệt tiêu hoàn toàn hiện tượng tự quay ngược (snap-back) khi góc quay vượt ±180°
+                if self._last_gesture_angle is not None and self._last_locked_axis_idx == self._locked_axis_idx:
+                    d_wrap = (active_angle - self._last_gesture_angle + np.pi) % (2.0 * np.pi) - np.pi
+                    active_angle = self._last_gesture_angle + d_wrap
+                self._last_gesture_angle = active_angle
+                self._last_locked_axis_idx = self._locked_axis_idx
+
                 # Trừ đi deadzone để chuyển động bắt đầu mượt từ 0 không bị giật bậc thang
                 signed_angle = float(np.sign(active_angle) * max(0.0, abs(active_angle) - deadzone))
-                omega_filtered[self._locked_axis_idx] = signed_angle
+
+                # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55) & Kẹp biên độ góc quay tuyệt đối:
+                theta_applied = self.grip_rotation_gain * signed_angle
+
+                # Kẹp biên độ góc quay tuyệt đối (Strict Absolute Angle Clamping) so với mốc gốc ban đầu (_tcp_origin_rot):
+                # Hạn chế tối đa góc quay trục Z (Yaw) không vượt quá ngưỡng an toàn chống vặn xoắn thân máy
+                if self._locked_axis_idx == 2:  # Yaw (Z)
+                    max_limit = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(35.0))))))
+                elif self._locked_axis_idx == 0:  # Roll
+                    max_limit = getattr(self, "max_roll_rotation_delta", float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(85.0)))))
+                elif self._locked_axis_idx == 1:  # Pitch
+                    max_limit = getattr(self, "max_pitch_rotation_delta", float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(65.0)))))
+                else:
+                    max_limit = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
+
+                theta_applied = float(np.clip(theta_applied, -max_limit, max_limit))
+                omega_filtered[self._locked_axis_idx] = theta_applied / self.grip_rotation_gain if self.grip_rotation_gain > 0 else theta_applied
+
+                omega_scaled = np.zeros(3, dtype=np.float64)
+                omega_scaled[self._locked_axis_idx] = theta_applied
             else:
                 omega_filtered = np.zeros(3, dtype=np.float64)
+                omega_scaled = np.zeros(3, dtype=np.float64)
 
-            # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55) & Kẹp biên độ xoay an toàn:
-            omega_scaled = self.grip_rotation_gain * omega_filtered
-
-            # Khống chế cứng biên độ góc quay trục Z (Yaw): max_z_rotation_delta
-            # nhằm triệt tiêu hoàn toàn hiện tượng vặn xoắn cổ tay hoặc thân máy khi bẻ tay VR quá đà
-            max_z = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_Z_ROTATION_DELTA", os.environ.get("MAX_YAW_DELTA", str(math.radians(75.0))))))
-            omega_scaled[2] = float(np.clip(omega_scaled[2], -max_z, max_z))
-
-            # Khống chế toàn cục góc quay an toàn (MAX_ROT_ENVELOPE = ±110° ~ 1.92 rad)
-            MAX_ROT_ENVELOPE = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
-            omega_scaled = np.clip(omega_scaled, -MAX_ROT_ENVELOPE, MAX_ROT_ENVELOPE)
-
-            # 5. Ánh xạ vector trục quay theo Task-Aligned Invariant Mapping hoặc Decoupled Mode:
-            if self.rotation_mode in ("task_aligned", "task_invariant") or (self.rotation_mode != "decoupled_3axis" and self.nav_mode in ("task_aligned", "clock_face")):
-                # ===============================================================
-                # TASK-ALIGNED INVARIANT MAPPING:
-                # - Hành động 1 (Uống nước): Gập/ngửa cổ tay -> Chuyển động Pitch
-                #   theo mặt phẳng thẳng đứng dọc thân robot (Body Pitch: u_pitch_axis).
-                # - Hành động 2 (Vặn chìa khóa): Vặn cổ tay -> Tool Roll xoay 100%
-                #   quanh trục dọc của đầu công cụ (Tool Approach Axis: u_tool_axis).
-                # - Hành động 3 (Quét trái/phải): Quét cổ tay -> Base Yaw quanh trục Z.
-                # ===============================================================
-                # 1. Trục dọc đầu công cụ (Tool Approach Axis in Base Frame):
-                u_tool_axis = R_r_anchor.apply([0.0, 0.0, 1.0])
-                norm_tool = float(np.linalg.norm(u_tool_axis))
-                if norm_tool > 1e-6:
-                    u_tool_axis /= norm_tool
-                else:
-                    u_tool_axis = np.array([0.0, 0.0, -1.0])
-
-                # 2. Trục gập thân uống nước (Body Pitch Axis vuông góc với phương vươn u_radial):
+            # 5. Ánh xạ vector trục quay theo Hệ quy chiếu Mặt đồng hồ đã chốt cố định không bị trôi:
+            if self._clock_u_radial is None or self._clock_u_tangential is None:
                 p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
                 r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
                 if r_anc_xy > 0.03:
@@ -810,12 +853,14 @@ class DeltaPoseSource:
                     theta_arm_cur = float(self._anchor_theta_arm)
                 else:
                     theta_arm_cur = 0.0
+                self._clock_u_radial = np.array([np.cos(theta_arm_cur), np.sin(theta_arm_cur), 0.0], dtype=np.float64)
+                self._clock_u_tangential = np.array([-np.sin(theta_arm_cur), np.cos(theta_arm_cur), 0.0], dtype=np.float64)
+                self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-                theta_clock = theta_arm_cur + (self._current_delta_theta if is_translating else 0.0)
-                u_pitch_axis = np.array([-np.sin(theta_clock), np.cos(theta_clock), 0.0], dtype=np.float64)
-
-                # 3. Trục quét chuyển hướng (Base Yaw Axis):
-                u_yaw_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            if self.rotation_mode in ("task_aligned", "task_invariant") or (self.rotation_mode != "decoupled_3axis" and self.nav_mode in ("task_aligned", "clock_face")):
+                u_tool_axis = self._clock_u_tool if self._clock_u_tool is not None else R_r_anchor.apply([0.0, 0.0, 1.0])
+                u_pitch_axis = self._clock_u_tangential
+                u_yaw_axis = self._clock_u_up
 
                 omega_robot = (
                     omega_scaled[0] * u_tool_axis +
@@ -823,19 +868,9 @@ class DeltaPoseSource:
                     omega_scaled[2] * u_yaw_axis
                 )
             elif self.rotation_mode == "decoupled_3axis" and self.nav_mode == "clock_face":
-                p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
-                r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
-                if r_anc_xy > 0.03:
-                    theta_arm_cur = float(np.arctan2(p_anc_xy[1], p_anc_xy[0]))
-                elif self._anchor_theta_arm is not None:
-                    theta_arm_cur = float(self._anchor_theta_arm)
-                else:
-                    theta_arm_cur = 0.0
-
-                theta_clock = theta_arm_cur + (self._current_delta_theta if is_translating else 0.0)
-                u_radial = np.array([np.cos(theta_clock), np.sin(theta_clock), 0.0], dtype=np.float64)
-                u_pitch_axis = np.array([-np.sin(theta_clock), np.cos(theta_clock), 0.0], dtype=np.float64)
-                u_yaw_axis = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+                u_radial = self._clock_u_radial
+                u_pitch_axis = self._clock_u_tangential
+                u_yaw_axis = self._clock_u_up
 
                 omega_robot = omega_scaled[0] * u_radial + omega_scaled[1] * u_pitch_axis + omega_scaled[2] * u_yaw_axis
             else:
@@ -864,7 +899,13 @@ class DeltaPoseSource:
             self.is_translating = bool(is_translating)
             self.is_pure_rotation = False
             self._locked_axis_idx = None
+            self._last_locked_axis_idx = None
+            self._last_gesture_angle = None
             self._last_dominant_rot_axis = None
+            self._clock_u_radial = None
+            self._clock_u_tangential = None
+            self._clock_u_up = None
+            self._clock_u_tool = None
             if self.nav_mode in ("cylindrical", "clock_face") and is_translating:
                 # Khi chỉ bóp Cò tịnh tiến trong chế độ Đồng hồ / Trụ:
                 # Ngàm kẹp tự động xoay theo góc quay Base quanh trục Z để giữ nguyên góc đón vật
@@ -873,10 +914,19 @@ class DeltaPoseSource:
             else:
                 R_target_robot = R_r_anchor
         target_quat_xyzw = R_target_robot.as_quat()
-        
+        norm_tq = np.linalg.norm(target_quat_xyzw)
+        if norm_tq > 1e-9:
+            target_quat_xyzw /= norm_tq
+
+        # Kiểm tra tính liên tục dấu Quaternion mục tiêu thô với frame trước
+        if self._prev_raw_target_quat_xyzw is not None:
+            if np.dot(target_quat_xyzw, self._prev_raw_target_quat_xyzw) < 0.0:
+                target_quat_xyzw = -target_quat_xyzw
+        self._prev_raw_target_quat_xyzw = np.copy(target_quat_xyzw)
+
         # Dynamic Adaptive EMA Filter & Slew-Rate Limiter cho Quaternion (mượt mà, triệt tiêu vi rung)
         if self._ema_quat_xyzw is None:
-            self._ema_quat_xyzw = target_quat_xyzw
+            self._ema_quat_xyzw = np.copy(target_quat_xyzw)
         else:
             if np.dot(self._ema_quat_xyzw, target_quat_xyzw) < 0.0:
                 target_quat_xyzw = -target_quat_xyzw
@@ -969,6 +1019,14 @@ class DeltaPoseSource:
         self._last_button_state = 0
         self.grip_engaged = False
         self._locked_axis_idx = None
+        self._last_locked_axis_idx = None
+        self._last_gesture_angle = None
+        self._clock_u_radial = None
+        self._clock_u_tangential = None
+        self._clock_u_up = None
+        self._clock_u_tool = None
+        self._last_hand_quat_xyzw = None
+        self._prev_raw_target_quat_xyzw = None
         self.R_ctrl_origin = None
         self.R_tcp_origin = None
         self.prev_target_quat = None
@@ -1008,7 +1066,13 @@ class DeltaPoseSource:
             ], dtype=float)
             norm_ach = np.linalg.norm(q_achieved_xyzw)
             if norm_ach > 1e-6:
-                self._anchor_quat_robot_xyzw = q_achieved_xyzw / norm_ach
+                q_achieved_xyzw /= norm_ach
+
+            # Chống lật dấu Quaternion giữa q_achieved và anchor robot
+            if self._anchor_quat_robot_xyzw is not None:
+                if np.dot(q_achieved_xyzw, self._anchor_quat_robot_xyzw) < 0.0:
+                    q_achieved_xyzw = -q_achieved_xyzw
+            self._anchor_quat_robot_xyzw = q_achieved_xyzw
             
             # Reset controller anchor to current hand orientation
             if self._last_hand_quat_xyzw is not None:
@@ -1019,12 +1083,17 @@ class DeltaPoseSource:
             if self._anchor_quat_quest_xyzw is not None:
                 self.R_ctrl_origin = R.from_quat(self._anchor_quat_quest_xyzw)
             
+            self._last_gesture_angle = 0.0
+            
             target_quat_wxyz = [
                 float(achieved_quat_wxyz[0]),
                 float(achieved_quat_wxyz[1]),
                 float(achieved_quat_wxyz[2]),
                 float(achieved_quat_wxyz[3])
             ]
+            if hasattr(self, "_last_output_quat_wxyz") and self._last_output_quat_wxyz is not None:
+                if np.dot(target_quat_wxyz, self._last_output_quat_wxyz) < 0.0:
+                    target_quat_wxyz = [-w for w in target_quat_wxyz]
             self.prev_target_quat = list(target_quat_wxyz)
             self._last_output_quat_wxyz = list(target_quat_wxyz)
         except Exception:
