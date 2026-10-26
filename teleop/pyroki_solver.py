@@ -983,11 +983,11 @@ class PyrokiIKSolver:
             q_candidate = (np.array(ref_seed) + dq_clamped).tolist()
 
             # Ràng buộc biên độ tuyệt đối của Khớp Thân so với Mỏ Neo (Hard Excursion Envelope):
-            # Base q0 <= +-0.006 rad (~0.34 deg), Shoulder/Elbow <= +-0.025 rad (~1.43 deg)
+            # Base q0 <= +-0.006 rad (~0.34 deg), Shoulder/Elbow <= +-0.018 rad (~1.03 deg)
             body_swing_blocked = False
             if is_pure_rot or arm_anchor is not None:
                 anchor_body = np.array(arm_anchor[:3] if arm_anchor is not None else ref_seed[:3], dtype=float)
-                EXCURSION_LIMITS = np.array([0.006, 0.025, 0.025], dtype=float)
+                EXCURSION_LIMITS = np.array([0.006, 0.018, 0.018], dtype=float)
                 body_err = np.abs(np.array(q_candidate[:3]) - anchor_body)
                 if np.any(body_err >= EXCURSION_LIMITS - 1e-4):
                     body_swing_blocked = True
