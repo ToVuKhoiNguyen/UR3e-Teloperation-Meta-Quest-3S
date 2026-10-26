@@ -3,6 +3,7 @@ import time
 import math
 import numpy as np
 import transforms3d
+from typing import Optional, Dict, Any, List, Union
 from scipy.spatial.transform import Rotation as R
 
 def isolate_rotation_axes(rotvec, snap_ratio=0.30, smooth_high=0.60, deadband=0.026):
@@ -136,6 +137,12 @@ class DeltaPoseSource:
         self._last_locked_axis_idx = None
         self._last_hand_quat_xyzw = None
         self._prev_raw_target_quat_xyzw = None
+
+        # Trục xoay bị khóa đơn trục và kẹp giới hạn động với Zero Windup
+        self.locked_rotation_axis = None
+        self._axis_theta_max_pos = {}
+        self._axis_theta_min_neg = {}
+        self._gesture_angle_offset = 0.0
 
         self._last_button_state = 0
         self.out_of_reach_time = 0.0
@@ -452,6 +459,10 @@ class DeltaPoseSource:
             self._last_locked_axis_idx = None
             self._last_hand_quat_xyzw = np.copy(self._anchor_quat_quest_xyzw)
             self._prev_raw_target_quat_xyzw = None
+            self.locked_rotation_axis = None
+            self._axis_theta_max_pos.clear()
+            self._axis_theta_min_neg.clear()
+            self._gesture_angle_offset = 0.0
 
             # Chốt cố định hệ trục Clock-Face ngay tại tư thế bắt đầu (_origin_pose)
             p_xy = self._anchor_tcp[:2]
@@ -810,6 +821,7 @@ class DeltaPoseSource:
                     self._locked_axis_idx = int(np.argmax(abs_w))
                     self._last_locked_axis_idx = self._locked_axis_idx
                     self._last_gesture_angle = float(omega_gesture[self._locked_axis_idx])
+                    self._gesture_angle_offset = 0.0
 
             if self._locked_axis_idx is not None:
                 omega_filtered = np.zeros(3, dtype=np.float64)
@@ -822,8 +834,9 @@ class DeltaPoseSource:
                 self._last_gesture_angle = active_angle
                 self._last_locked_axis_idx = self._locked_axis_idx
 
-                # Trừ đi deadzone để chuyển động bắt đầu mượt từ 0 không bị giật bậc thang
-                signed_angle = float(np.sign(active_angle) * max(0.0, abs(active_angle) - deadzone))
+                # Trừ đi gesture_angle_offset (Zero Windup) và deadzone để chuyển động bắt đầu mượt từ 0
+                effective_hand_angle = active_angle - self._gesture_angle_offset
+                signed_angle = float(np.sign(effective_hand_angle) * max(0.0, abs(effective_hand_angle) - deadzone))
 
                 # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55) & Kẹp biên độ góc quay tuyệt đối:
                 theta_applied = self.grip_rotation_gain * signed_angle
@@ -839,7 +852,31 @@ class DeltaPoseSource:
                 else:
                     max_limit = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
 
-                theta_applied = float(np.clip(theta_applied, -max_limit, max_limit))
+                # Áp dụng giới hạn động từ FK Axis-Purity Guard (Zero Windup Dynamic Clamping)
+                if self._locked_axis_idx in self._axis_theta_max_pos:
+                    dyn_max = self._axis_theta_max_pos[self._locked_axis_idx]
+                    if dyn_max < max_limit:
+                        max_limit = dyn_max
+                if self._locked_axis_idx in self._axis_theta_min_neg:
+                    dyn_min = self._axis_theta_min_neg[self._locked_axis_idx]
+                    if dyn_min > -max_limit:
+                        min_limit = dyn_min
+                    else:
+                        min_limit = -max_limit
+                else:
+                    min_limit = -max_limit
+
+                # Xử lý Zero Windup: Nếu tay người dùng tiếp tục vặn vượt quá giới hạn khả dụng,
+                # hấp thu góc vượt quá vào _gesture_angle_offset để khi đảo chiều thì góc quay giảm ngay lập tức!
+                if theta_applied > max_limit:
+                    excess_theta = theta_applied - max_limit
+                    self._gesture_angle_offset += excess_theta / max(self.grip_rotation_gain, 1e-4)
+                    theta_applied = max_limit
+                elif theta_applied < min_limit:
+                    excess_theta = theta_applied - min_limit
+                    self._gesture_angle_offset += excess_theta / max(self.grip_rotation_gain, 1e-4)
+                    theta_applied = min_limit
+
                 omega_filtered[self._locked_axis_idx] = theta_applied / self.grip_rotation_gain if self.grip_rotation_gain > 0 else theta_applied
 
                 omega_scaled = np.zeros(3, dtype=np.float64)
@@ -875,14 +912,30 @@ class DeltaPoseSource:
                     omega_scaled[1] * u_pitch_axis +
                     omega_scaled[2] * u_yaw_axis
                 )
+                if self._locked_axis_idx == 0:
+                    self.locked_rotation_axis = np.copy(u_tool_axis)
+                elif self._locked_axis_idx == 1:
+                    self.locked_rotation_axis = np.copy(u_pitch_axis)
+                elif self._locked_axis_idx == 2:
+                    self.locked_rotation_axis = np.copy(u_yaw_axis)
             elif self.rotation_mode in ("clock_face", "clockface") or (self.rotation_mode == "decoupled_3axis" and self.nav_mode in ("clock_face", "clockface")):
                 u_radial = self._clock_u_radial
                 u_pitch_axis = self._clock_u_tangential
                 u_yaw_axis = self._clock_u_up
 
                 omega_robot = omega_scaled[0] * u_radial + omega_scaled[1] * u_pitch_axis + omega_scaled[2] * u_yaw_axis
+                if self._locked_axis_idx == 0:
+                    self.locked_rotation_axis = np.copy(u_radial)
+                elif self._locked_axis_idx == 1:
+                    self.locked_rotation_axis = np.copy(u_pitch_axis)
+                elif self._locked_axis_idx == 2:
+                    self.locked_rotation_axis = np.copy(u_yaw_axis)
             else:
                 omega_robot = np.copy(omega_scaled)
+                if self._locked_axis_idx is not None:
+                    u_base = np.zeros(3)
+                    u_base[self._locked_axis_idx] = 1.0
+                    self.locked_rotation_axis = u_base
 
             R_delta_base_single = R.from_rotvec(omega_robot)
 
@@ -910,6 +963,7 @@ class DeltaPoseSource:
             self._last_locked_axis_idx = None
             self._last_gesture_angle = None
             self._last_dominant_rot_axis = None
+            self.locked_rotation_axis = None
             self._clock_u_radial = None
             self._clock_u_tangential = None
             self._clock_u_up = None
@@ -1029,6 +1083,10 @@ class DeltaPoseSource:
         self._locked_axis_idx = None
         self._last_locked_axis_idx = None
         self._last_gesture_angle = None
+        self.locked_rotation_axis = None
+        self._axis_theta_max_pos.clear()
+        self._axis_theta_min_neg.clear()
+        self._gesture_angle_offset = 0.0
         self._clock_u_radial = None
         self._clock_u_tangential = None
         self._clock_u_up = None
@@ -1058,11 +1116,31 @@ class DeltaPoseSource:
         """Tương thích ngược cho các module hoặc bài test gọi reset()"""
         self.reset_anchor()
 
+    def clamp_axis_rotation(self, axis_idx: Optional[int], theta_limit: float):
+        """
+        Kẹp cứng góc xoay mục tiêu dọc theo trục đang khóa (Dynamic Limit Clamping with Zero Windup):
+        - Không cho phép góc quay vượt quá theta_limit vừa chạm tới.
+        - Tự động phân loại biên dương / biên âm dựa trên dấu của theta_limit.
+        """
+        if axis_idx is None:
+            axis_idx = self._locked_axis_idx
+        if axis_idx is None:
+            return
+        axis_idx = int(axis_idx)
+        theta_lim = float(theta_limit)
+        if theta_lim >= 0.0:
+            cur_max = self._axis_theta_max_pos.get(axis_idx, float('inf'))
+            self._axis_theta_max_pos[axis_idx] = min(cur_max, theta_lim)
+        else:
+            cur_min = self._axis_theta_min_neg.get(axis_idx, float('-inf'))
+            self._axis_theta_min_neg[axis_idx] = max(cur_min, theta_lim)
+
     def clamp_rotation_anchor(self, achieved_quat_wxyz):
         """
         Anti-windup re-anchor for rotation:
         When tool rotation hits physical joint limit, clamp the anchor orientation
-        so that reversing the hand rotation immediately reverses the robot rotation (Zero Windup).
+        along the locked axis WITHOUT corrupting R_tcp_origin with off-axis tilt,
+        ensuring zero windup on reverse.
         """
         try:
             # Convert achieved_quat_wxyz [w, x, y, z] to xyzw
@@ -1081,18 +1159,18 @@ class DeltaPoseSource:
                 if np.dot(q_achieved_xyzw, self._anchor_quat_robot_xyzw) < 0.0:
                     q_achieved_xyzw = -q_achieved_xyzw
             self._anchor_quat_robot_xyzw = q_achieved_xyzw
-            
+
             # Reset controller anchor to current hand orientation
             if self._last_hand_quat_xyzw is not None:
                 self._anchor_quat_quest_xyzw = np.copy(self._last_hand_quat_xyzw)
+                self.R_ctrl_origin = R.from_quat(self._anchor_quat_quest_xyzw)
             if self._anchor_quat_robot_xyzw is not None:
                 self._ema_quat_xyzw = np.copy(self._anchor_quat_robot_xyzw)
                 self.R_tcp_origin = R.from_quat(self._anchor_quat_robot_xyzw)
-            if self._anchor_quat_quest_xyzw is not None:
-                self.R_ctrl_origin = R.from_quat(self._anchor_quat_quest_xyzw)
-            
+
             self._last_gesture_angle = 0.0
-            
+            self._gesture_angle_offset = 0.0
+
             target_quat_wxyz = [
                 float(achieved_quat_wxyz[0]),
                 float(achieved_quat_wxyz[1]),
