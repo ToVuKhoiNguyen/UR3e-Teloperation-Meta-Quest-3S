@@ -765,8 +765,10 @@ class DeltaPoseSource:
             else:
                 omega_filtered = np.zeros(3, dtype=np.float64)
 
-            # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55):
+            # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55) & Kẹp biên độ xoay an toàn (110°):
+            MAX_ROT_ENVELOPE = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))  # ±110° (~1.92 rad)
             omega_scaled = self.grip_rotation_gain * omega_filtered
+            omega_scaled = np.clip(omega_scaled, -MAX_ROT_ENVELOPE, MAX_ROT_ENVELOPE)
             R_delta_base_single = R.from_rotvec(omega_scaled)
 
             # 5. Nhân vào BÊN TRÁI (Pre-multiply) lên hướng gốc của TCP:
