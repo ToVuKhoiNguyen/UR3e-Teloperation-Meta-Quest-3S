@@ -993,32 +993,29 @@ class PyrokiIKSolver:
             if wrist_max > MAX_WRIST_STEP:
                 dq_clamped[3:] = delta_q_raw[3:] * (MAX_WRIST_STEP / wrist_max)
 
-            # Khi đang ở chế độ xoay thuần túy hoặc có Arm Anchor:
-            # Kẹp chặt bước nhảy per-frame của thân máy để chống giật
-            if is_pure_rot or arm_anchor is not None:
-                dq_clamped[0] = np.clip(delta_q_raw[0], -0.008, 0.008)
-                dq_clamped[1] = np.clip(delta_q_raw[1], -0.015, 0.015)
-                dq_clamped[2] = np.clip(delta_q_raw[2], -0.015, 0.015)
+            # Khi đang ở chế độ xoay thuần túy hoặc tịnh tiến:
+            # Scaled Vector Rate Limiting co giãn đồng đều cả 3 khớp thân để bảo toàn hướng vector
+            # và cho phép q1 (shoulder), q2 (elbow) co duỗi bù tâm tool0 mượt mà không bị kẹt cứng
+            if is_pure_rot:
+                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP_ROT", "0.020"))
             else:
-                # Khi đang tịnh tiến: Scaled Vector Rate Limiting co giãn đồng đều cả 3 khớp thân
-                # để bảo toàn 100% hướng vector dịch chuyển trong không gian Descartes (không giật cục hay lạng hướng)
-                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.060"))  # rad/step (~3.4°/step)
-                body_max = float(np.max(np.abs(delta_q_raw[:3])))
-                if body_max > MAX_BODY_STEP:
-                    dq_clamped[:3] = delta_q_raw[:3] * (MAX_BODY_STEP / body_max)
+                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.078"))  # +30% (0.060 -> 0.078 rad/step ~ 4.47°/step)
+            body_max = float(np.max(np.abs(delta_q_raw[:3])))
+            if body_max > MAX_BODY_STEP:
+                dq_clamped[:3] = delta_q_raw[:3] * (MAX_BODY_STEP / body_max)
 
             q_candidate = (np.array(ref_seed) + dq_clamped).tolist()
 
-            # Ràng buộc biên độ tuyệt đối của Khớp Thân so với Mỏ Neo (Hard Excursion Envelope):
-            # Base q0 <= +-0.006 rad (~0.34 deg), Shoulder/Elbow <= +-0.018 rad (~1.03 deg)
+            # Ràng buộc cơ chế Chống Vặn Thân Máy (Arm Anchor):
+            # Khớp q1, q2 co duỗi tối thiểu để giữ tâm tool0 đứng yên
+            # Khớp base q0 và thân máy tuyệt đối không được swing/reconfigure lệch khỏi anchor
             body_swing_blocked = False
             if is_pure_rot or arm_anchor is not None:
                 anchor_body = np.array(arm_anchor[:3] if arm_anchor is not None else ref_seed[:3], dtype=float)
-                EXCURSION_LIMITS = np.array([0.006, 0.018, 0.018], dtype=float)
+                EXCURSION_LIMITS = np.array([0.012, 0.018, 0.018], dtype=float)
                 body_err = np.abs(np.array(q_candidate[:3]) - anchor_body)
                 if np.any(body_err >= EXCURSION_LIMITS - 1e-4):
                     body_swing_blocked = True
-                    # Co giãn đồng bộ vector thân máy để bảo toàn ma trận trực giao Jacobian
                     scale_excursion = float(np.min(EXCURSION_LIMITS / np.maximum(body_err, 1e-6)))
                     scale_excursion = min(1.0, max(0.0, scale_excursion))
                     for b_i in range(3):

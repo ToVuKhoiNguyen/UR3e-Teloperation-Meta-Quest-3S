@@ -724,24 +724,24 @@ class DeltaPoseSource:
         target_pos[1] = np.clip(target_pos[1], -0.52, 0.52) # Y
         target_pos[2] = np.clip(target_pos[2], 0.035, 0.60) # Z (cách mặt bàn ít nhất 3.5cm an toàn)
 
-        # Slew Rate Limiter: Tối ưu trần max_step 0.070 (7.0cm / 50ms = 1.4 m/s) vừa nhanh vừa mượt mà
+        # Slew Rate Limiter: Tối ưu trần max_step 0.091 (+30% so với 0.070, ~1.82 m/s) vừa nhanh vừa mượt mà
         if self._ema_pos is not None:
             pos_step = target_pos - self._ema_pos
             step_mag = np.linalg.norm(pos_step)
-            max_step = float(os.environ.get("MAX_POS_STEP", "0.070"))  # tối đa 7.0cm / 50ms = 1.4 m/s
+            max_step = float(os.environ.get("MAX_POS_STEP", "0.091"))  # tối đa 9.1cm / 50ms = 1.82 m/s (+30% từ 0.070)
             if step_mag > max_step:
                 target_pos = self._ema_pos + pos_step * (max_step / step_mag)
 
         # Dynamic Adaptive EMA Filter cho Position (Làm mượt C1/C2 liên tục, triệt tiêu rung giật):
-        # - Khi đứng yên hoặc vi rung nhẹ (< 1cm): alpha = 0.25 (triệt tiêu vi rung sinh học)
-        # - Khi di chuyển dứt khoát (> 3cm): alpha = 0.55 (phản hồi tức thì, bám sát cử động tay mà không bị trễ)
+        # - Khi đứng yên hoặc vi rung nhẹ (< 1cm): alpha = 0.28 (triệt tiêu vi rung sinh học)
+        # - Khi di chuyển dứt khoát (> 3cm): alpha = 0.66 (+20% từ 0.55, phản hồi tức thì, bám sát cử động tay)
         if self._ema_pos is None:
             self._ema_pos = target_pos
         else:
             pos_diff = np.linalg.norm(target_pos - self._ema_pos)
             t_pos = np.clip(pos_diff / 0.03, 0.0, 1.0)
             smooth_pos = t_pos * t_pos * (3.0 - 2.0 * t_pos)
-            alpha_pos = 0.25 + (0.55 - 0.25) * smooth_pos
+            alpha_pos = 0.28 + (0.66 - 0.28) * smooth_pos
             self._ema_pos = alpha_pos * target_pos + (1.0 - alpha_pos) * self._ema_pos
 
         current_time = time.time()
@@ -844,7 +844,7 @@ class DeltaPoseSource:
                 # Kẹp biên độ góc quay tuyệt đối (Strict Absolute Angle Clamping) so với mốc gốc ban đầu (_tcp_origin_rot):
                 # Hạn chế tối đa góc quay trục Z (Yaw) không vượt quá ngưỡng an toàn chống vặn xoắn thân máy
                 if self._locked_axis_idx == 2:  # Yaw (Z)
-                    max_limit = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(35.0))))))
+                    max_limit = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(75.0))))))
                 elif self._locked_axis_idx == 0:  # Roll
                     max_limit = getattr(self, "max_roll_rotation_delta", float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(85.0)))))
                 elif self._locked_axis_idx == 1:  # Pitch
@@ -1128,10 +1128,10 @@ class DeltaPoseSource:
             return
         axis_idx = int(axis_idx)
         theta_lim = float(theta_limit)
-        if theta_lim >= 0.0:
+        if theta_lim > 0.05:
             cur_max = self._axis_theta_max_pos.get(axis_idx, float('inf'))
             self._axis_theta_max_pos[axis_idx] = min(cur_max, theta_lim)
-        else:
+        elif theta_lim < -0.05:
             cur_min = self._axis_theta_min_neg.get(axis_idx, float('-inf'))
             self._axis_theta_min_neg[axis_idx] = max(cur_min, theta_lim)
 

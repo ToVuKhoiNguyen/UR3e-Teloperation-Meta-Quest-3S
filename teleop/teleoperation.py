@@ -790,9 +790,9 @@ class TeleoperationController:
         raw_q = np.array(pose_safe["quat"] if isinstance(pose_safe, dict) else pose_safe[1], dtype=float)
         raw_q_norm = raw_q / max(1e-6, np.linalg.norm(raw_q))
 
-        # ── 2. Target Pose Tethering: limit distance to current TCP to at most d_max (75mm) ──
+        # ── 2. Target Pose Tethering: limit distance to current TCP to at most d_max (98mm leash, +30%) ──
         # Prevents target from running away to infinity when arm reaches full extension boundary.
-        D_MAX_TETHER = float(os.environ.get("MAX_TETHER_DIST", "0.075"))  # 75mm leash
+        D_MAX_TETHER = float(os.environ.get("MAX_TETHER_DIST", "0.098"))  # 98mm leash (+30% from 75mm)
         vec_raw = raw_p - p_curr
         dist_raw = float(np.linalg.norm(vec_raw))
         if dist_raw > D_MAX_TETHER:
@@ -831,6 +831,9 @@ class TeleoperationController:
             elif self._arm_anchor_q is not None and not is_source_translating:
                 # Already locked in pure rotation mode, maintain anchor until target translated >= 3mm
                 is_pure_rotation = True
+            elif delta_p_req < 0.002 and delta_rot_req > 0.01 and not is_source_translating:
+                # Target orientation differs from current TCP but position is stationary: pure rotation!
+                is_pure_rotation = True
             else:
                 is_pure_rotation = False
 
@@ -857,11 +860,11 @@ class TeleoperationController:
                         if arr.shape == (3,) and np.linalg.norm(arr) > 1e-6:
                             self._rot_locked_axis = arr / np.linalg.norm(arr)
                         else:
-                            self._rot_locked_axis = np.array([0.0, 0.0, 1.0], dtype=float)
+                            self._rot_locked_axis = None
                     except Exception:
-                        self._rot_locked_axis = np.array([0.0, 0.0, 1.0], dtype=float)
+                        self._rot_locked_axis = None
                 else:
-                    self._rot_locked_axis = np.array([0.0, 0.0, 1.0], dtype=float)
+                    self._rot_locked_axis = None
             else:
                 self._arm_anchor_q = None
                 self._arm_anchor_p = None
@@ -872,8 +875,8 @@ class TeleoperationController:
                 self._rot_locked_axis = None
 
         # ── 3. High-Responsiveness Target Low-Pass Filter (Translational EMA) ──
-        # Responsive Cartesian EMA (BETA_POS=0.55, BETA_ROT=0.75) for smooth, solid and silky tracking
-        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.55")))
+        # Responsive Cartesian EMA (BETA_POS=0.66 [+20%], BETA_ROT=0.75 [100% preserved]) for silky tracking
+        BETA_POS = float(os.environ.get("POS_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_POS", "0.66")))
         BETA_ROT = float(os.environ.get("ROT_SMOOTH_BETA", os.environ.get("TARGET_FILTER_BETA_ROT", "0.75")))
         if self._was_clutch_released or self._smoothed_pos is None:
             self._smoothed_pos = np.copy(raw_p)
@@ -906,8 +909,8 @@ class TeleoperationController:
 
         # ── 4. Continuous Slew-Rate Limiter for Linear Velocity ──
         # Replaces blunt hard-clamping with continuous C1 acceleration / deceleration S-curve profile
-        V_MAX_LIN = float(os.environ.get("MAX_LINEAR_VEL", "0.45"))   # 0.45 m/s (~22.5mm/step at 20Hz)
-        A_MAX_LIN = float(os.environ.get("MAX_LINEAR_ACC", "2.2"))    # 2.2 m/s^2 (~0.11 m/s velocity ramp per step)
+        V_MAX_LIN = float(os.environ.get("MAX_LINEAR_VEL", "0.585"))   # 0.585 m/s (+30% from 0.45 m/s, ~29.25mm/step at 20Hz)
+        A_MAX_LIN = float(os.environ.get("MAX_LINEAR_ACC", "2.86"))    # 2.86 m/s^2 (+30% from 2.2 m/s^2)
 
         # Scale velocity down smoothly when near singularities
         v_max_lin_eff = float(V_MAX_LIN * (1.0 - 0.40 * sing_alpha))
@@ -997,17 +1000,8 @@ class TeleoperationController:
             is_sliding = result_ik.get("sliding_on_barrier", False)
             at_joint_limit = result_ik.get("at_joint_limit", False) or result_ik.get("body_swing_blocked", False)
 
-            # ── FK Axis-Purity Guard & Synchronized Boundary Freeze for Pure Rotation ──
+            # ── Pure Rotation Boundary Guard (Input Angle Clamping & Zero Windup) ──
             if is_pure_rotation:
-                MAX_OFF_AXIS_TILT_RAD = float(os.environ.get("MAX_OFF_AXIS_TILT_RAD", str(np.deg2rad(1.5))))
-                MAX_ROT_TRACKING_ERR_RAD = float(os.environ.get("MAX_ROT_TRACKING_ERR_RAD", str(np.deg2rad(3.0))))
-
-                u_locked = self._rot_locked_axis
-                if u_locked is None or not isinstance(u_locked, np.ndarray) or u_locked.shape != (3,):
-                    u_locked = np.array([0.0, 0.0, 1.0], dtype=float)
-                norm_u = np.linalg.norm(u_locked)
-                u_locked = u_locked / (norm_u if norm_u > 1e-6 else 1.0)
-
                 R_orig = self._rot_origin_R
                 if R_orig is None or not isinstance(R_orig, R):
                     fk_0 = self._solver.fk(q_real)
@@ -1016,62 +1010,72 @@ class TeleoperationController:
                     self._rot_origin_R = R_orig
 
                 R_target = R.from_quat([q_clamped[1], q_clamped[2], q_clamped[3], q_clamped[0]])
+                delta_R_target = R_target * R_orig.inv()
+                omega_target = delta_R_target.as_rotvec()
+
+                u_locked = self._rot_locked_axis
+                if u_locked is None or not isinstance(u_locked, np.ndarray) or u_locked.shape != (3,):
+                    norm_om = float(np.linalg.norm(omega_target))
+                    if norm_om > 1e-4:
+                        u_locked = omega_target / norm_om
+                    else:
+                        u_locked = np.array([0.0, 0.0, 1.0], dtype=float)
+                else:
+                    norm_u = np.linalg.norm(u_locked)
+                    u_locked = u_locked / (norm_u if norm_u > 1e-6 else 1.0)
+
+                theta_desired = float(np.dot(omega_target, u_locked))
 
                 lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
                 upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
                 SAFE_EPS = 1e-3
+                MAX_BASE_YAW_COMPENSATION = float(os.environ.get("MAX_BASE_YAW_COMPENSATION", str(np.deg2rad(20.0))))
+                MAX_ROT_POS_ERR = float(os.environ.get("MAX_ROT_POS_ERR", "0.015"))  # 15 mm
+                p_anchor = np.array(self._arm_anchor_p if self._arm_anchor_p is not None else user_cmd_p, dtype=float)
 
-                def check_pure_candidate(q_eval):
-                    # 1. Hard joint limit check (must strictly respect UR3E_LIMITS without clipping)
+                def is_pure_rotation_candidate_valid(q_eval):
+                    # 1. Hard physical joint limit check
                     if np.any(q_eval < lower_limits + SAFE_EPS) or np.any(q_eval > upper_limits - SAFE_EPS):
-                        return False, 999.0, 999.0, 0.0
-                    # 2. Arm Anchor excursion check (all body joints within DELTA_MAX_BODY)
+                        return False
+                    # 2. Base joint excursion check: q[0] within MAX_BASE_YAW_COMPENSATION (20 deg)
                     if self._arm_anchor_q is not None:
-                        if np.any(np.abs(q_eval[:3] - self._arm_anchor_q) > 0.020):
-                            return False, 999.0, 999.0, 0.0
-                    # 3. Collision safety check
+                        if abs(q_eval[0] - self._arm_anchor_q[0]) > MAX_BASE_YAW_COMPENSATION:
+                            return False
+                    # 3. Position hold check: FK pos vs p_anchor within 15mm
+                    fk_ev = self._solver.fk(q_eval)
+                    pos_err = np.linalg.norm(np.array(fk_ev["pos"]) - p_anchor)
+                    if pos_err > MAX_ROT_POS_ERR:
+                        return False
+                    # 4. Collision check
                     self_m = self._solver.check_self_collision(q_eval, verbose=False)
                     if not self_m.get("safe", True):
-                        return False, 999.0, 999.0, 0.0
+                        return False
                     tbl_m = self._solver.check_table_collision(q_eval, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
                     if not tbl_m.get("safe", True):
-                        return False, 999.0, 999.0, 0.0
-                    # 4. FK Axis-Purity calculation
-                    fk_ev = self._solver.fk(q_eval)
-                    q_ev = fk_ev["quat"]
-                    R_ach = R.from_quat([q_ev[1], q_ev[2], q_ev[3], q_ev[0]])
-                    delta_R_ach = R_ach * R_orig.inv()
-                    omega_ach = delta_R_ach.as_rotvec()
-                    theta_ach = float(np.dot(omega_ach, u_locked))
-                    omega_par = theta_ach * u_locked
-                    omega_off = omega_ach - omega_par
-                    e_off = float(np.linalg.norm(omega_off))
-                    e_track = float(np.linalg.norm((R_ach * R_target.inv()).as_rotvec()))
-
-                    is_pure = (e_off <= MAX_OFF_AXIS_TILT_RAD) and (e_track <= MAX_ROT_TRACKING_ERR_RAD)
-                    return is_pure, e_off, e_track, theta_ach
+                        return False
+                    return True
 
                 q_cand_arr = np.array(q_target, dtype=float)
-                pure_ok, e_off, e_track, theta_ach = check_pure_candidate(q_cand_arr)
+                cand_ok = is_pure_rotation_candidate_valid(q_cand_arr)
 
-                if not pure_ok or at_joint_limit:
+                if cand_ok and not at_joint_limit:
+                    at_joint_limit = False
+                    self._last_pure_valid_q = np.copy(q_cand_arr)
+                    self._last_pure_theta = theta_desired
+                else:
                     at_joint_limit = True
-                    # Bisection to find largest valid configuration alpha in [0, 1] without per-joint clipping
                     q_base = np.array(self._last_pure_valid_q if self._last_pure_valid_q is not None else q_real, dtype=float)
                     q_low = q_base
                     q_high = q_cand_arr
                     theta_valid = self._last_pure_theta
                     for _ in range(4):
                         q_mid = 0.5 * (q_low + q_high)
-                        ok_mid, _, _, th_mid = check_pure_candidate(q_mid)
-                        if ok_mid:
+                        if is_pure_rotation_candidate_valid(q_mid):
                             q_low = q_mid
-                            theta_valid = th_mid
                         else:
                             q_high = q_mid
                     q_target = q_low.tolist()
                     self._last_pure_valid_q = np.copy(q_target)
-                    self._last_pure_theta = theta_valid
 
                     # Inform pose source to clamp rotation target along locked axis (Zero Windup)
                     if self._pose is not None:
@@ -1090,9 +1094,6 @@ class TeleoperationController:
                     R_pure_bound = R.from_rotvec(rot_vec) * R_orig
                     q_pb_xyzw = R_pure_bound.as_quat()
                     self._smoothed_quat = np.array([q_pb_xyzw[3], q_pb_xyzw[0], q_pb_xyzw[1], q_pb_xyzw[2]])
-                else:
-                    self._last_pure_valid_q = np.copy(q_target)
-                    self._last_pure_theta = theta_ach
 
             # Target Projection & Re-anchoring to prevent integrator windup when sliding or touching joint limit
             if (is_sliding or at_joint_limit) and self._pose is not None:
@@ -1120,8 +1121,14 @@ class TeleoperationController:
 
                 # Joint Acceleration / Slew-Rate Limiter (Second-Order Smooth Tracking with Soft Braking)
                 A_MAX_BASE = float(os.environ.get("MAX_JOINT_ACC", "0.045"))
-                A_MAX = A_MAX_BASE * 1.25 if (delta_p_req > 0.003 or delta_rot_req > 0.02) else A_MAX_BASE
-                V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.080"))    # 0.080 rad/step (= 1.6 rad/s at 20Hz, đầm chắc mượt mà)
+                is_translating_motion = (delta_p_req > 0.001) or (not is_pure_rotation)
+                if is_translating_motion:
+                    A_MAX_BASE_EFF = A_MAX_BASE * 1.30
+                    V_MAX = float(os.environ.get("MAX_JOINT_VEL_TRANS", os.environ.get("MAX_JOINT_VEL", "0.104")))
+                else:
+                    A_MAX_BASE_EFF = A_MAX_BASE
+                    V_MAX = float(os.environ.get("MAX_JOINT_VEL", "0.080"))
+                A_MAX = A_MAX_BASE_EFF * 1.25 if (delta_p_req > 0.003 or delta_rot_req > 0.02) else A_MAX_BASE_EFF
 
                 # Continuous smooth damping ramp for singularities:
                 raw_damping = 1.0 - 0.30 * (sing_alpha * sing_alpha * (3.0 - 2.0 * sing_alpha))
