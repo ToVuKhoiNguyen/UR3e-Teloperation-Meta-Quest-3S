@@ -373,7 +373,7 @@ class TestTranslationSpeedAndAntiArmSwing(unittest.TestCase):
         final_q = self.mock_exec.last_sent
         delta_base = abs(final_q[0] - start_q[0])
         self.assertLess(delta_base, 0.015, f"Viser Gizmo rotation caused base to swing {np.degrees(delta_base):.2f}°")
-        self.assertGreater(mock_widget.clamped_calls, 0, "Widget wxyz should be clamped on limit")
+        self.assertEqual(mock_widget.clamped_calls, 0, "Widget wxyz must NEVER be overwritten by server during teleop")
 
 
 if __name__ == "__main__":
