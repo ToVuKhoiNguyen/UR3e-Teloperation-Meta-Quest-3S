@@ -14,6 +14,10 @@ class WidgetPoseSource:
     def __init__(self, target_widget, alpha=0.55):
         self.target_widget = target_widget
         self.alpha = alpha
+        self._prev_read_pos = None
+        self._prev_read_quat_wxyz = None
+        self.is_translating = False
+        self.is_pure_rotation = False
 
     def get_pose(self):
         curr_gizmo_pos = np.array(getattr(self.target_widget, "position", [0.0, 0.0, 0.0]), dtype=float)
@@ -25,6 +29,25 @@ class WidgetPoseSource:
         curr_gizmo_pos[0] = np.clip(curr_gizmo_pos[0], -0.52, 0.52)
         curr_gizmo_pos[1] = np.clip(curr_gizmo_pos[1], -0.52, 0.52)
         curr_gizmo_pos[2] = np.clip(curr_gizmo_pos[2], 0.015, 0.60)
+
+        # Detect active mouse interaction intent
+        if self._prev_read_pos is not None and self._prev_read_quat_wxyz is not None:
+            d_pos = float(np.linalg.norm(curr_gizmo_pos - self._prev_read_pos))
+            dot_q = abs(float(np.dot(curr_gizmo_quat_wxyz, self._prev_read_quat_wxyz)))
+            d_rot = 2.0 * float(np.arccos(min(1.0, max(-1.0, dot_q))))
+
+            if d_pos > 0.001:  # user is actively dragging Gizmo translation (> 1mm)
+                self.is_translating = True
+                self.is_pure_rotation = False
+            elif d_rot > 0.015:  # user is actively rotating Gizmo in place (> 0.85 deg)
+                self.is_translating = False
+                self.is_pure_rotation = True
+            else:  # stationary / mouse released / idle
+                self.is_translating = False
+                self.is_pure_rotation = False
+
+        self._prev_read_pos = np.copy(curr_gizmo_pos)
+        self._prev_read_quat_wxyz = np.copy(curr_gizmo_quat_wxyz)
 
         return {
             "pos": curr_gizmo_pos.tolist(),
@@ -55,11 +78,14 @@ class WidgetPoseSource:
     def _ema_pos(self, val):
         pass
 
-    def sync_with_robot(self, *args, pos=None, quat=None, joints=None, fk_func=None, **kwargs):
+    def sync_with_robot(self, *args, pos=None, quat=None, joints=None, fk_func=None, force=False, **kwargs):
         """
-        Đồng bộ mốc tọa độ Gizmo khi được gọi tường minh (từ VR mode, Go Home, hoặc startup).
-        Tuyệt đối không can thiệp khi người dùng đang kéo chuột.
+        Đồng bộ mốc tọa độ Gizmo chỉ khi được gọi tường minh với force=True (từ Go Home hoặc startup).
+        TUYỆT ĐỐI CẤM ghi đè lên ui.gizmo trong vòng lặp teleop thông thường để chống trôi ảo.
         """
+        if not force:
+            return
+
         if len(args) == 1:
             arg0 = args[0]
             if isinstance(arg0, (list, tuple, np.ndarray)):
@@ -111,20 +137,11 @@ class WidgetPoseSource:
 
     def clamp_rotation_anchor(self, achieved_quat_wxyz):
         """
-        Anti-windup re-anchor for rotation in Viser Gizmo:
-        When tool rotation hits physical joint limit or body swing boundary, clamp ui.gizmo.wxyz
-        to achieved rotation so that dragging back immediately reverses rotation (Zero Windup).
+        No-op for Viser Gizmo: TUYỆT ĐỐI CẤM ghi đè ui.gizmo.wxyz từ Server/FK
+        khi người dùng không chủ động kéo chuột Gizmo. Gizmo phải đứng yên tuyệt đối
+        tại vị trí người dùng thả ra.
         """
-        if hasattr(self.target_widget, "update_pose"):
-            try:
-                self.target_widget.update_pose(wxyz=achieved_quat_wxyz, suppress=True)
-            except Exception:
-                pass
-        elif hasattr(self.target_widget, "wxyz"):
-            try:
-                self.target_widget.wxyz = tuple(float(w) for w in achieved_quat_wxyz)
-            except Exception:
-                pass
+        pass
 
 
 def get_robot_fk_as_ur(teleop, ctrl):
