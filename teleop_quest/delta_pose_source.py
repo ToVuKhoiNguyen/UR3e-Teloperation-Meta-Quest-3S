@@ -73,7 +73,7 @@ class DeltaPoseSource:
         
         self.enable_axis_snapping = os.environ.get("AXIS_SNAPPING", "1") == "1"
         self.nav_mode = os.environ.get("NAV_MODE", "cylindrical").lower()
-        self.rotation_mode = os.environ.get("ROTATION_MODE", "task_aligned").lower()
+        self.rotation_mode = os.environ.get("ROTATION_MODE", "decoupled_3axis").lower()
         # Hiệu chuẩn hướng bàn máy (Desk-Aligned):
         # Mặc định khi chưa hiệu chuẩn: [0, 0, -1] và [1, 0, 0]
         self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
@@ -450,6 +450,7 @@ class DeltaPoseSource:
             self._last_button_state = current_button_state
             self._last_gesture_angle = None
             self._last_locked_axis_idx = None
+            self._last_hand_quat_xyzw = np.copy(self._anchor_quat_quest_xyzw)
             self._prev_raw_target_quat_xyzw = None
 
             # Chốt cố định hệ trục Clock-Face ngay tại tư thế bắt đầu (_origin_pose)
@@ -864,7 +865,7 @@ class DeltaPoseSource:
                 norm_tool = float(np.linalg.norm(u_tool))
                 self._clock_u_tool = (u_tool / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0])
 
-            if self.rotation_mode in ("task_aligned", "task_invariant") or (self.rotation_mode != "decoupled_3axis" and self.nav_mode in ("task_aligned", "clock_face")):
+            if self.rotation_mode in ("task_aligned", "task_invariant"):
                 u_tool_axis = self._clock_u_tool if self._clock_u_tool is not None else R_r_anchor.apply([0.0, 0.0, 1.0])
                 u_pitch_axis = self._clock_u_tangential
                 u_yaw_axis = self._clock_u_up
@@ -874,7 +875,7 @@ class DeltaPoseSource:
                     omega_scaled[1] * u_pitch_axis +
                     omega_scaled[2] * u_yaw_axis
                 )
-            elif self.rotation_mode == "decoupled_3axis" and self.nav_mode == "clock_face":
+            elif self.rotation_mode in ("clock_face", "clockface") or (self.rotation_mode == "decoupled_3axis" and self.nav_mode in ("clock_face", "clockface")):
                 u_radial = self._clock_u_radial
                 u_pitch_axis = self._clock_u_tangential
                 u_yaw_axis = self._clock_u_up
