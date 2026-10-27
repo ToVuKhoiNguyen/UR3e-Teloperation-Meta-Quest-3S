@@ -539,18 +539,16 @@ class TeleoperationController:
 
     def _check_wrist_saturation(self, q_ik: np.ndarray, q_prev_valid: np.ndarray) -> Tuple[bool, str]:
         """
-        Wrist-Saturation & Base-Takeover Detection during pure rotation:
-        Kiểm tra 2 dấu hiệu:
-        1. Khớp cổ tay chạm hoặc vượt UR3E_LIMITS (margin 1.5°).
-        2. Khớp base bị ép xoay vọt để gánh thay cổ tay (Base Takeover):
-           - |Δq0| > 0.8 * |Δq_wrist| khi |Δq0| > 0.3°
-           - Hoặc tổng góc lệch tích lũy |q_ik[0] - q_grip_start[0]| > 18°
+        Wrist-Saturation Detection during pure rotation:
+        Chỉ đóng băng bước xoay khi ít nhất 1 trong 3 khớp cổ tay (q_ik[3], q_ik[4], q_ik[5])
+        thực sự chạm hoặc vượt biên giới hạn vật lý UR3E_LIMITS.
+        Tuyệt đối không so sánh tỷ lệ base hay giới hạn cứng q0 để cho phép bù tâm tự nhiên khi xoay Roll/Pitch.
         """
         lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
         upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-        WRIST_LIMIT_MARGIN = float(os.environ.get("WRIST_LIMIT_MARGIN", str(np.deg2rad(1.5))))
+        WRIST_LIMIT_MARGIN = float(os.environ.get("WRIST_LIMIT_MARGIN", str(np.deg2rad(1.0))))  # margin 1.0 deg
 
-        # Dấu hiệu 1: Khớp cổ tay chạm UR3E_LIMITS (wrist_1, wrist_2, wrist_3)
+        # Khớp cổ tay chạm hoặc vượt UR3E_LIMITS (wrist_1, wrist_2, wrist_3)
         for w_idx in (3, 4, 5):
             # Cận trên:
             if q_ik[w_idx] >= upper_limits[w_idx] - WRIST_LIMIT_MARGIN:
@@ -561,27 +559,8 @@ class TeleoperationController:
                 if q_ik[w_idx] <= q_prev_valid[w_idx] + 1e-5:
                     return True, f"wrist_{w_idx-2} reached lower limit ({q_ik[w_idx]:.3f} <= {lower_limits[w_idx]+WRIST_LIMIT_MARGIN:.3f})"
 
-        # Dấu hiệu 2: Khớp base bị ép xoay vọt để gánh thay cổ tay (Base Takeover)
-        delta_q0 = abs(q_ik[0] - q_prev_valid[0])
-        delta_wrist = (
-            abs(q_ik[3] - q_prev_valid[3]) +
-            abs(q_ik[4] - q_prev_valid[4]) +
-            abs(q_ik[5] - q_prev_valid[5])
-        )
-
-        BASE_TAKEOVER_THRESH = float(os.environ.get("BASE_TAKEOVER_THRESH", str(np.deg2rad(0.3))))  # 0.3 deg
-        if delta_q0 > BASE_TAKEOVER_THRESH and delta_q0 > 0.8 * delta_wrist:
-            return True, f"Base takeover detected: |Δq0|={np.degrees(delta_q0):.2f}° > 0.8 * |Δq_wrist|={np.degrees(delta_wrist):.2f}°"
-
-        if getattr(self, "_grip_start_q0", None) is not None:
-            cum_base_drift = abs(q_ik[0] - self._grip_start_q0)
-            BASE_CUM_DRIFT_LIMIT = float(os.environ.get("BASE_CUM_DRIFT_LIMIT", "0.014"))  # 0.014 rad (~0.8°)
-            if cum_base_drift > BASE_CUM_DRIFT_LIMIT:
-                prev_cum_drift = abs(q_prev_valid[0] - self._grip_start_q0)
-                if cum_base_drift >= prev_cum_drift - 1e-5:
-                    return True, f"Base cumulative drift {np.degrees(cum_base_drift):.1f}° > {np.degrees(BASE_CUM_DRIFT_LIMIT):.1f}°"
-
         return False, ""
+
 
     def _apply_anti_windup_reanchor(self, p_curr: np.ndarray, q_curr_wxyz: np.ndarray):
         """
