@@ -814,17 +814,17 @@ class DeltaPoseSource:
             omega_local = R_delta_local.as_rotvec()
 
             # 2. Tách Đúng 3 Trục Nội tại của Tay cầm Quest (Delta R_hand) & Single-Axis Lock:
-            # - Trục 1 — yaw_input (Gập cổ tay lắc trái / phải): omega_local[1]
-            # - Trục 2 — pitch_input (Uống nước ngửa lên / Đặt cốc chúc xuống): omega_local[2]
-            # - Trục 3 — roll_input (Vặn chìa khóa Clock-face): -omega_local[0]
-            roll_input  = -float(omega_local[0])
-            pitch_input =  float(omega_local[2])
-            yaw_input   =  float(omega_local[1])
+            # - Trục 1 — yaw_input (Gập cổ tay lắc trái / phải): omega_local[2]
+            # - Trục 2 — pitch_input (Uống nước ngửa lên / Đặt cốc chúc xuống): -omega_local[0]
+            # - Trục 3 — roll_input (Vặn chìa khóa Clock-face): -omega_local[1]
+            yaw_input   =  float(omega_local[2])
+            pitch_input = -float(omega_local[0])
+            roll_input  = -float(omega_local[1])
 
             omega_gesture = np.array([
-                roll_input,   # Kênh 0: Roll (Vặn chìa khóa Clock-face quanh trục tool)
-                pitch_input,  # Kênh 1: Pitch (Uống nước ngửa lên / Đặt cốc chúc xuống)
-                yaw_input     # Kênh 2: Yaw (Gập cổ tay lắc trái / phải quanh Z_world)
+                roll_input,   # Kênh 0: Roll (Vặn chìa khóa Clock-face quanh A_roll)
+                pitch_input,  # Kênh 1: Pitch (Uống nước ngửa lên / Đặt cốc chúc xuống quanh A_pitch)
+                yaw_input     # Kênh 2: Yaw (Gập cổ tay lắc trái / phải quanh A_yaw)
             ], dtype=np.float64)
 
             # 3. Khóa Độc Quyền 1 Trục (Strict Single-Axis Dominant Lock):
@@ -903,15 +903,14 @@ class DeltaPoseSource:
                 omega_filtered = np.zeros(3, dtype=np.float64)
                 omega_scaled = np.zeros(3, dtype=np.float64)
 
-            # 5. Áp dụng Phép Xoay Bất biến theo Tư thế hiện tại của Tay máy (R_tcp_origin) cho cả 3 Trục:
+            # 5. Xây dựng Hệ 3 Trục Đích Trực giao Tuyệt đối trên Robot (A_yaw ⊥ A_pitch ⊥ A_roll):
             # Khởi tạo vector đơn vị f_tcp chỉ hướng mũi tool trích xuất từ R_tcp_origin (R_r_anchor)
             u_tool_raw = R_r_anchor.apply([0.0, 0.0, 1.0])
             norm_tool = float(np.linalg.norm(u_tool_raw))
             f_tcp = (u_tool_raw / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0], dtype=np.float64)
-            Z_world = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-            # Đảm bảo hệ trục phẳng mặt bàn _clock_u_tangential luôn sẵn sàng phục vụ trường hợp f_tcp chúc thẳng đứng
-            if self._clock_u_radial is None or self._clock_u_tangential is None:
+            # Chốt mốc hệ tam diện trực giao trong base_link tại thời điểm bóp Grip (Engage Snapshot):
+            if self._clock_u_radial is None or self._clock_u_tangential is None or self._clock_u_up is None:
                 p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
                 r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
                 if r_anc_xy > 0.03:
@@ -925,47 +924,30 @@ class DeltaPoseSource:
                 self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
                 self._clock_u_tool = np.copy(f_tcp)
 
+            A_yaw = self._clock_u_up             # Trục 1: Thẳng đứng mặt bàn [0, 0, 1]^T
+            A_roll = self._clock_u_radial        # Trục 2: Hướng vươn ngang từ tâm Base đến TCP
+            A_pitch = self._clock_u_tangential    # Trục 3: Trục ngang vuông góc tuyệt đối = A_yaw x A_roll
+
             if self._locked_axis_idx == 2:
-                # Nhánh Trục 1 — Gập cổ tay trái / phải (yaw_input thắng => Yaw):
-                # Trục quay: Luôn quay quanh trục thẳng đứng thế giới u_yaw = Z_world = [0, 0, 1]^T
-                # Công thức: R_target = Rot(u_yaw, theta_yaw) * R_tcp_origin (Nhân bên trái - Pre-multiply)
-                u_yaw = Z_world
-                R_delta_target = R.from_rotvec(theta_applied * u_yaw)
+                # Nhánh Trục 1 — Gập cổ tay trái / phải (yaw_input thắng => Yaw quanh A_yaw):
+                # Công thức: R_target = Rot(A_yaw, theta_yaw) * R_tcp_origin (Pre-multiply)
+                R_delta_target = R.from_rotvec(theta_applied * A_yaw)
                 R_target = R_delta_target * R_r_anchor
-                self.locked_rotation_axis = np.copy(u_yaw)
+                self.locked_rotation_axis = np.copy(A_yaw)
 
             elif self._locked_axis_idx == 1:
-                # Nhánh Trục 2 — Uống nước / Đặt cốc (pitch_input thắng => Pitch):
-                # Trục quay: Luôn quay quanh trục ngang nằm song song mặt bàn và vuông góc với f_tcp:
-                # u_pitch = normalize(Z_world x f_tcp)
-                z_cross_f = np.cross(Z_world, f_tcp)
-                norm_cross = float(np.linalg.norm(z_cross_f))
-                if norm_cross >= 1e-3:
-                    u_pitch = z_cross_f / norm_cross
-                else:
-                    # Nếu đầu máy đang chúc thẳng đứng vuông góc mặt bàn, lấy trục ngang nội tại của R_tcp_origin làm u_pitch
-                    u_tangential = self._clock_u_tangential
-                    if u_tangential is not None and np.linalg.norm(u_tangential) > 1e-3:
-                        u_pitch = u_tangential / np.linalg.norm(u_tangential)
-                    else:
-                        u_y_local = R_r_anchor.apply([0.0, 1.0, 0.0])
-                        u_y_horiz = np.array([u_y_local[0], u_y_local[1], 0.0], dtype=np.float64)
-                        norm_y = float(np.linalg.norm(u_y_horiz))
-                        u_pitch = (u_y_horiz / norm_y) if norm_y > 1e-3 else np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-                # Công thức: R_target = Rot(u_pitch, theta_pitch) * R_tcp_origin (Nhân bên trái - Pre-multiply)
-                R_delta_target = R.from_rotvec(theta_applied * u_pitch)
+                # Nhánh Trục 2 — Uống nước / Đặt cốc (pitch_input thắng => Pitch quanh A_pitch):
+                # Công thức: R_target = Rot(A_pitch, theta_pitch) * R_tcp_origin (Pre-multiply)
+                R_delta_target = R.from_rotvec(theta_applied * A_pitch)
                 R_target = R_delta_target * R_r_anchor
-                self.locked_rotation_axis = np.copy(u_pitch)
+                self.locked_rotation_axis = np.copy(A_pitch)
 
             elif self._locked_axis_idx == 0:
-                # Nhánh Trục 3 — Vặn chìa khóa (roll_input thắng => Roll Clock-face):
-                # Trục quay: Luôn quay quanh chính trục mũi công cụ hiện tại u_roll = f_tcp
-                # Công thức: R_target = Rot(u_roll, theta_roll) * R_tcp_origin = R_tcp_origin * Rot(e_roll_local, theta_roll)
-                u_roll = f_tcp
-                R_delta_target = R.from_rotvec(theta_applied * u_roll)
+                # Nhánh Trục 3 — Vặn chìa khóa (roll_input thắng => Roll Clock-face quanh A_roll):
+                # Công thức: R_target = Rot(A_roll, theta_roll) * R_tcp_origin (Pre-multiply)
+                R_delta_target = R.from_rotvec(theta_applied * A_roll)
                 R_target = R_delta_target * R_r_anchor
-                self.locked_rotation_axis = np.copy(u_roll)
+                self.locked_rotation_axis = np.copy(A_roll)
 
             else:
                 R_target = R_r_anchor
