@@ -116,7 +116,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
             res = pose_source.get_pose()
 
         self.assertIsNotNone(res)
-        self.assertEqual(pose_source.locked_axis_idx, 2, "Phải khóa độc quyền Channel 2 (Vặn chìa khóa / Clock-face)!")
+        self.assertEqual(pose_source.locked_axis_idx, 0, "Phải khóa độc quyền Channel 0 (Vặn chìa khóa / Roll)!")
 
         q_t = res["quat"]
         R_target = R.from_quat([q_t[1], q_t[2], q_t[3], q_t[0]])
@@ -124,20 +124,20 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         rot_deg = np.degrees(rotvec_delta)
         print(f"  Robot delta rotvec: Roll={rot_deg[0]:.2f}°, Pitch={rot_deg[1]:.2f}°, Yaw={rot_deg[2]:.2f}°")
 
-        # Vặn chìa khóa: quay quanh trục Z_base (Clock-face)
-        self.assertGreater(rotvec_delta[2], math.radians(5.0), "Vặn chìa khóa phải xoay quanh +Z_base (Clock-face)")
-        # Roll và Pitch phải triệt tiêu 100% về 0.0
-        self.assertAlmostEqual(rotvec_delta[0], 0.0, places=5, msg="Roll rò rỉ phải bằng 0.0 rad!")
+        # Vặn chìa khóa: quay quanh trục X_base (Roll)
+        self.assertGreater(rotvec_delta[0], math.radians(5.0), "Vặn chìa khóa phải xoay thuận chiều kim đồng hồ quanh +X_base")
+        # Pitch và Yaw phải triệt tiêu 100% về 0.0
         self.assertAlmostEqual(rotvec_delta[1], 0.0, places=5, msg="Pitch rò rỉ phải bằng 0.0 rad!")
+        self.assertAlmostEqual(rotvec_delta[2], 0.0, places=5, msg="Yaw rò rỉ phải bằng 0.0 rad!")
         print("  -> PASS: Vặn chìa khóa hoàn toàn độc lập, triệt tiêu 100% rò rỉ sang các trục khác!")
 
     def test_02_tilted_controller_isolates_pitch(self):
         """
-        Kiểm chứng: Gập cổ tay 20° với tay cầm nghiêng tự nhiên:
+        Kiểm chứng: Chúc cổ tay 20° với tay cầm nghiêng tự nhiên:
         - Khóa đơn trục chọn đúng Channel 1 (Pitch).
-        - Robot chúc đầu xuống quanh Y_base, Roll/Yaw phải bằng 0.0 rad.
+        - Robot gập về phía thân quanh Y_base, Roll/Yaw phải bằng 0.0 rad.
         """
-        print("\n[TEST 2] GẬP CỔ TAY (PITCH) VỚI TAY CẦM NGHIÊNG TỰ NHIÊN")
+        print("\n[TEST 2] CHÚC CỔ TAY (PITCH) VỚI TAY CẦM NGHIÊNG TỰ NHIÊN")
         tcp_home, R_origin = self._get_tcp_from_joints(self.SAFE_HOME_JOINTS)
         server = MockQuestServer()
         ctrl = MockRobotCtrl(self.SAFE_HOME_JOINTS, tcp_home)
@@ -158,7 +158,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         })
         pose_source.get_pose()
 
-        # Gập cổ tay 20° xuống quanh trục ngang tay cầm (+Z local)
+        # Gập/chúc cổ tay 20° xuống quanh trục ngang tay cầm (+Z local)
         R_pitch_local = R.from_rotvec([0.0, 0.0, math.radians(20.0)])
         R_hand_pitch = R_natural * R_pitch_local
         q_pitch = R_hand_pitch.as_quat()
@@ -176,7 +176,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
             res = pose_source.get_pose()
 
         self.assertIsNotNone(res)
-        self.assertEqual(pose_source.locked_axis_idx, 0, "Phải khóa độc quyền Channel 0 (Gập cổ tay)!")
+        self.assertEqual(pose_source.locked_axis_idx, 1, "Phải khóa độc quyền Channel 1 (Pitch)!")
 
         q_t = res["quat"]
         R_target = R.from_quat([q_t[1], q_t[2], q_t[3], q_t[0]])
@@ -184,11 +184,11 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         rot_deg = np.degrees(rotvec_delta)
         print(f"  Robot delta rotvec: Roll={rot_deg[0]:.2f}°, Pitch={rot_deg[1]:.2f}°, Yaw={rot_deg[2]:.2f}°")
 
-        # Gập cổ tay phải chúc đầu xuống quanh trục X_base
-        self.assertLess(rotvec_delta[0], -math.radians(5.0), "Gập cổ tay phải làm cụp/chúc đầu ngàm")
-        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=5, msg="Pitch rò rỉ phải bằng 0.0 rad!")
+        # Chúc cổ tay (đặt cốc) làm gập về phía thân quanh +Y_base
+        self.assertGreater(rotvec_delta[1], math.radians(5.0), "Chúc cổ tay phải làm cụp/gập về phía thân")
+        self.assertAlmostEqual(rotvec_delta[0], 0.0, places=5, msg="Roll rò rỉ phải bằng 0.0 rad!")
         self.assertAlmostEqual(rotvec_delta[2], 0.0, places=5, msg="Yaw rò rỉ phải bằng 0.0 rad!")
-        print("  -> PASS: Gập cổ tay hoàn toàn độc lập, chúc đầu xuống mượt mà!")
+        print("  -> PASS: Chúc cổ tay hoàn toàn độc lập, gập về phía thân mượt mà!")
 
     def test_03_tilted_controller_isolates_yaw(self):
         """
@@ -235,7 +235,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
             res = pose_source.get_pose()
 
         self.assertIsNotNone(res)
-        self.assertEqual(pose_source.locked_axis_idx, 1, "Phải khóa độc quyền Channel 1 (Uống nước)!")
+        self.assertEqual(pose_source.locked_axis_idx, 2, "Phải khóa độc quyền Channel 2 (Gập cổ tay / Yaw)!")
 
         q_t = res["quat"]
         R_target = R.from_quat([q_t[1], q_t[2], q_t[3], q_t[0]])
@@ -243,11 +243,11 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         rot_deg = np.degrees(rotvec_delta)
         print(f"  Robot delta rotvec: Roll={rot_deg[0]:.2f}°, Pitch={rot_deg[1]:.2f}°, Yaw={rot_deg[2]:.2f}°")
 
-        # Uống nước (lắc ngang) phải quay quanh trục tiếp tuyến Y_base
-        self.assertGreater(rotvec_delta[1], math.radians(5.0), "Uống nước phải nghiêng quanh trục tiếp tuyến +Y_base")
+        # Lắc cổ tay sang trái phải quay quanh +Z_base (Yaw)
+        self.assertGreater(rotvec_delta[2], math.radians(5.0), "Gập cổ tay trái phải quay quanh trục thẳng đứng +Z_base")
         self.assertAlmostEqual(rotvec_delta[0], 0.0, places=5, msg="Roll rò rỉ phải bằng 0.0 rad!")
-        self.assertAlmostEqual(rotvec_delta[2], 0.0, places=5, msg="Yaw rò rỉ phải bằng 0.0 rad!")
-        print("  -> PASS: Động tác uống nước hoàn toàn độc lập, chuẩn xác!")
+        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=5, msg="Pitch rò rỉ phải bằng 0.0 rad!")
+        print("  -> PASS: Gập/lắc cổ tay hoàn toàn độc lập, liếc ngang quanh Z chuẩn xác!")
 
     def test_04_home_pose_3_distinct_axes(self):
         """

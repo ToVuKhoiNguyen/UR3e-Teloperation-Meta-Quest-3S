@@ -117,6 +117,7 @@ class DeltaPoseSource:
         self.is_translating = False
 
         # Khởi tạo toàn bộ biến trạng thái phục vụ cơ chế xoay Grip (Clock-face & Single-Axis Lock)
+        self.clutch_engaged = False
         self.grip_engaged = False
         self.R_ctrl_origin = None
         self.R_tcp_origin = None
@@ -336,8 +337,28 @@ class DeltaPoseSource:
             print("[HIỆU CHUẨN] Bàn máy mặc định: yaw=+0.0°")
 
     def get_pose(self):
+        # Tự động đồng bộ và xả cờ kẹt nếu có phiên WebXR mới hoặc kết nối lại
+        if hasattr(self.server, "check_and_clear_new_session"):
+            val = self.server.check_and_clear_new_session()
+            if isinstance(val, bool) and val is True:
+                self.reset_anchor()
+
         frame = self.server.get_frame()
         if not frame:
+            return None
+
+        # Kiểm tra mất tracking tạm thời hoặc không có pose (tay cầm khuất tầm nhìn camera kính)
+        if frame.get("tracking_lost") or frame.get("pos") is None:
+            self._last_button_state = 0
+            self.clutch_engaged = False
+            self.grip_engaged = False
+            self.is_pure_rotation = False
+            self.is_translating = False
+            self._locked_axis_idx = None
+            self.R_ctrl_origin = None
+            self.R_tcp_origin = None
+            self._anchor_pos_quest = None
+            self._anchor_quat_quest_xyzw = None
             return None
 
         # 1. Hiệu chuẩn hướng bàn máy khi người dùng bấm tổ hợp phím Grip + Button B (bắt cạnh lên):
@@ -361,6 +382,7 @@ class DeltaPoseSource:
         
         if current_button_state == 0:
             self._last_button_state = 0
+            self.clutch_engaged = False
             self.grip_engaged = False
             self.is_pure_rotation = False
             self.is_translating = False
@@ -376,7 +398,10 @@ class DeltaPoseSource:
         if current_button_state != self._last_button_state:
             self._anchor_pos_quest = np.array(frame["pos"])
             self._locked_axis_idx = None
+            self.clutch_engaged = bool(is_translating)
             self.grip_engaged = bool(is_rotating)
+            self.is_translating = bool(is_translating)
+            self.is_pure_rotation = bool(is_rotating and not is_translating)
             
             q_q = frame.get("quat", [1.0, 0.0, 0.0, 0.0]) # [w, x, y, z]
             self._anchor_quat_quest_xyzw = np.array([q_q[1], q_q[2], q_q[3], q_q[0]], dtype=float)
@@ -788,22 +813,18 @@ class DeltaPoseSource:
             R_delta_local = R_q_anchor.inv() * R_hand_current
             omega_local = R_delta_local.as_rotvec()
 
-            # 2. Hoán vị vòng tròn 3 trục (3-Axis Cyclic Permutation):
-            # - Kênh 0: Action_GapCoTay    <- nhận từ động tác Gập cổ tay: omega_local[0]
-            # - Kênh 1: Action_UongNuoc     <- nhận từ động tác Uống nước:  omega_local[2]
-            # - Kênh 2: Action_VanChiaKhoa  <- nhận từ động tác Vặn chìa khóa: omega_local[1]
-            act_gap_co_tay    = -float(omega_local[0])
-            act_uong_nuoc     = -float(omega_local[2])
-            act_van_chia_khoa =  float(omega_local[1])
+            # 2. Bảng Quy Ước Ánh Xạ Đã Chốt Cứng (Locked Convention):
+            # 1. Gập cổ tay (Quay/lắc cổ tay trái - phải): Yaw trục thẳng đứng Z (Kênh 2)
+            # 2. Uống nước (Ngửa lên) & Đặt cốc (Chúc xuống): Pitch ngửa ra xa / gập về thân (Kênh 1)
+            # 3. Vặn chìa khóa (Xoay tròn cổ tay Clock-face): Roll quanh trục tool (Kênh 0)
+            act_van_chia_khoa = -float(omega_local[0])  # Kênh 0: Roll (Vặn chìa khóa - Mặt đồng hồ)
+            act_uong_nuoc     =  float(omega_local[2])  # Kênh 1: Pitch (Uống nước ngửa xa / Đặt cốc gập thân)
+            act_gap_co_tay    =  float(omega_local[1])  # Kênh 2: Yaw (Gập cổ tay - Liếc ngang quanh trục Z)
 
-            # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
-            # - Kênh 0: Gập/ngửa cổ tay (Action_GapCoTay)
-            # - Kênh 1: Uống nước (Action_UongNuoc)
-            # - Kênh 2: Vặn chìa khóa (Action_VanChiaKhoa / Clock-face)
             omega_gesture = np.array([
-                act_gap_co_tay,
-                act_uong_nuoc,
-                act_van_chia_khoa
+                act_van_chia_khoa,  # Kênh 0: Roll (Mặt đồng hồ quanh trục tool)
+                act_uong_nuoc,      # Kênh 1: Pitch (Ngửa ra xa / Gập về thân)
+                act_gap_co_tay      # Kênh 2: Yaw (Quay quanh trục thẳng đứng Z)
             ], dtype=np.float64)
 
             # 3. Khóa Độc Quyền 1 Trục (Strict Single-Axis Dominant Lock):
@@ -944,7 +965,7 @@ class DeltaPoseSource:
             else:
                 R_target_robot = R_delta_base_single * R_r_anchor
 
-            axis_names = ["GẬP CỔ TAY (Pitch)", "UỐNG NƯỚC (Tangential)", "VẶN CHÌA KHÓA (Clock-face)"]
+            axis_names = ["VẶN CHÌA KHÓA (Roll)", "UỐNG NƯỚC (Pitch)", "GẬP CỔ TAY (Yaw)"]
             if self._locked_axis_idx is not None and abs(omega_filtered[self._locked_axis_idx]) > 1e-4:
                 deg_rot = np.degrees(abs(omega_scaled[self._locked_axis_idx]))
                 diag_msg = f"XOAY {axis_names[self._locked_axis_idx]} ({deg_rot:.1f}° | Khóa 1 trục)"
@@ -1076,6 +1097,7 @@ class DeltaPoseSource:
 
     def reset_anchor(self):
         self._last_button_state = 0
+        self.clutch_engaged = False
         self.grip_engaged = False
         self._locked_axis_idx = None
         self._last_locked_axis_idx = None
