@@ -139,6 +139,12 @@ class DeltaPoseSource:
         self._last_hand_quat_xyzw = None
         self._prev_raw_target_quat_xyzw = None
 
+        # Neo hệ 3 trục xoay bám theo tư thế động của đầu máy (Intrinsic Tool Frame theo chuẩn Home)
+        self._R_home = None
+        self._e_yaw_local = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+        self._e_pitch_local = np.array([-0.743525, 0.668707, 0.0], dtype=np.float64)
+        self._e_roll_local = np.array([-0.668707, -0.743525, 0.0], dtype=np.float64)
+
         # Trục xoay bị khóa đơn trục và kẹp giới hạn động với Zero Windup
         self.locked_rotation_axis = None
         self._axis_theta_max_pos = {}
@@ -330,10 +336,12 @@ class DeltaPoseSource:
                 self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
                 self._desk_u_right = np.array([1.0, 0.0, 0.0])
             desk_yaw = math.degrees(math.atan2(self._desk_u_fwd[0], -self._desk_u_fwd[2]))
+            self._R_home = None
             print(f"[HIỆU CHUẨN] Bàn máy đã căn chỉnh theo kính VR (Grip + B): yaw={desk_yaw:+.1f}°")
         else:
             self._desk_u_fwd = np.array([0.0, 0.0, -1.0])
             self._desk_u_right = np.array([1.0, 0.0, 0.0])
+            self._R_home = None
             print("[HIỆU CHUẨN] Bàn máy mặc định: yaw=+0.0°")
 
     def get_pose(self):
@@ -489,30 +497,50 @@ class DeltaPoseSource:
             self._axis_theta_min_neg.clear()
             self._gesture_angle_offset = 0.0
 
-            # Chốt cố định hệ trục Clock-Face ngay tại tư thế bắt đầu (_origin_pose)
-            p_xy = self._anchor_tcp[:2]
-            r_anc_xy = float(np.hypot(p_xy[0], p_xy[1]))
-            if r_anc_xy > 0.03:
-                theta_clock = float(np.arctan2(p_xy[1], p_xy[0]))
-            elif self._anchor_theta_arm is not None:
-                theta_clock = float(self._anchor_theta_arm)
-            else:
-                theta_clock = 0.0
-            self._clock_u_radial = np.array([np.cos(theta_clock), np.sin(theta_clock), 0.0], dtype=np.float64)
-            self._clock_u_tangential = np.array([-np.sin(theta_clock), np.cos(theta_clock), 0.0], dtype=np.float64)
-            self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+            # Chốt cố định hệ 3 trục quay bám động theo tư thế đầu máy R_tcp_origin (Intrinsic Tool Frame)
+            R_tcp_origin_snap = R.from_quat(self._anchor_quat_robot_xyzw)
+            if self._R_home is None:
+                self._R_home = R_tcp_origin_snap
+                p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
+                r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
+                if r_anc_xy > 0.03:
+                    theta_arm_home = float(np.arctan2(p_anc_xy[1], p_anc_xy[0]))
+                elif self._anchor_theta_arm is not None:
+                    theta_arm_home = float(self._anchor_theta_arm)
+                else:
+                    theta_arm_home = 0.0
+                a_roll_home = np.array([np.cos(theta_arm_home), np.sin(theta_arm_home), 0.0], dtype=np.float64)
+                a_pitch_home = np.array([-np.sin(theta_arm_home), np.cos(theta_arm_home), 0.0], dtype=np.float64)
+                a_yaw_home = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+                self._e_yaw_local = self._R_home.inv().apply(a_yaw_home)
+                self._e_pitch_local = self._R_home.inv().apply(a_pitch_home)
+                self._e_roll_local = self._R_home.inv().apply(a_roll_home)
+                norm_ey = np.linalg.norm(self._e_yaw_local)
+                if norm_ey > 1e-6:
+                    self._e_yaw_local /= norm_ey
+                norm_ep = np.linalg.norm(self._e_pitch_local)
+                if norm_ep > 1e-6:
+                    self._e_pitch_local /= norm_ep
+                norm_er = np.linalg.norm(self._e_roll_local)
+                if norm_er > 1e-6:
+                    self._e_roll_local /= norm_er
+
+            u_yaw = R_tcp_origin_snap.apply(self._e_yaw_local)
+            u_pitch = R_tcp_origin_snap.apply(self._e_pitch_local)
+            u_roll = R_tcp_origin_snap.apply(self._e_roll_local)
+            self._clock_u_up = u_yaw / max(float(np.linalg.norm(u_yaw)), 1e-6)
+            self._clock_u_tangential = u_pitch / max(float(np.linalg.norm(u_pitch)), 1e-6)
+            self._clock_u_radial = u_roll / max(float(np.linalg.norm(u_roll)), 1e-6)
+            self._clock_u_tool = np.copy(self._clock_u_radial)
 
             # Khởi tạo ma trận gốc cho cơ chế Grip
             try:
                 self.R_ctrl_origin = R.from_quat(self._anchor_quat_quest_xyzw)
-                self.R_tcp_origin = R.from_quat(self._anchor_quat_robot_xyzw)
-                u_tool = self.R_tcp_origin.apply([0.0, 0.0, 1.0])
-                norm_tool = float(np.linalg.norm(u_tool))
-                self._clock_u_tool = (u_tool / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0])
+                self.R_tcp_origin = R_tcp_origin_snap
             except Exception:
                 self.R_ctrl_origin = None
                 self.R_tcp_origin = None
-                self._clock_u_tool = np.array([0.0, 0.0, -1.0])
 
             target_quat_wxyz = [
                 float(self._anchor_quat_robot_xyzw[3]),
@@ -845,9 +873,18 @@ class DeltaPoseSource:
                 omega_filtered = np.zeros(3, dtype=np.float64)
                 active_angle = float(omega_gesture[self._locked_axis_idx])
 
-                # Angle unwrapping: triệt tiêu hoàn toàn hiện tượng tự quay ngược (snap-back) khi góc quay vượt ±180°
+                # 3. Chống lật dấu góc +-pi (Unwrap Incremental Angle) & Slew-Rate Clamping:
+                # Triệt tiêu hoàn toàn hiện tượng tự đảo chiều quay ngược lại khi góc quay tay cầm vượt +-pi (180°)
                 if self._last_gesture_angle is not None and self._last_locked_axis_idx == self._locked_axis_idx:
-                    d_wrap = (active_angle - self._last_gesture_angle + np.pi) % (2.0 * np.pi) - np.pi
+                    d_raw = active_angle - self._last_gesture_angle
+                    if d_raw < -math.pi:
+                        d_wrap = d_raw + 2.0 * math.pi
+                    elif d_raw > math.pi:
+                        d_wrap = d_raw - 2.0 * math.pi
+                    else:
+                        d_wrap = d_raw
+                    # Kẹp gia số frame-to-frame chống spike (tối đa 0.35 rad ~ 20°/frame tại 20Hz)
+                    d_wrap = float(np.clip(d_wrap, -0.35, 0.35))
                     active_angle = self._last_gesture_angle + d_wrap
                 self._last_gesture_angle = active_angle
                 self._last_locked_axis_idx = self._locked_axis_idx
@@ -903,30 +940,46 @@ class DeltaPoseSource:
                 omega_filtered = np.zeros(3, dtype=np.float64)
                 omega_scaled = np.zeros(3, dtype=np.float64)
 
-            # 5. Xây dựng Hệ 3 Trục Đích Trực giao Tuyệt đối trên Robot (A_yaw ⊥ A_pitch ⊥ A_roll):
-            # Khởi tạo vector đơn vị f_tcp chỉ hướng mũi tool trích xuất từ R_tcp_origin (R_r_anchor)
-            u_tool_raw = R_r_anchor.apply([0.0, 0.0, 1.0])
-            norm_tool = float(np.linalg.norm(u_tool_raw))
-            f_tcp = (u_tool_raw / norm_tool) if norm_tool > 1e-6 else np.array([0.0, 0.0, -1.0], dtype=np.float64)
-
-            # Chốt mốc hệ tam diện trực giao trong base_link tại thời điểm bóp Grip (Engage Snapshot):
+            # 5. Xây dựng Hệ 3 Trục Đích Trực giao Tuyệt đối Neo Động theo Hướng Đầu Máy R_r_anchor (R_tcp_origin):
             if self._clock_u_radial is None or self._clock_u_tangential is None or self._clock_u_up is None:
-                p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
-                r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
-                if r_anc_xy > 0.03:
-                    theta_arm_cur = float(np.arctan2(p_anc_xy[1], p_anc_xy[0]))
-                elif self._anchor_theta_arm is not None:
-                    theta_arm_cur = float(self._anchor_theta_arm)
-                else:
-                    theta_arm_cur = 0.0
-                self._clock_u_radial = np.array([np.cos(theta_arm_cur), np.sin(theta_arm_cur), 0.0], dtype=np.float64)
-                self._clock_u_tangential = np.array([-np.sin(theta_arm_cur), np.cos(theta_arm_cur), 0.0], dtype=np.float64)
-                self._clock_u_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-                self._clock_u_tool = np.copy(f_tcp)
+                if self._R_home is None:
+                    self._R_home = R_r_anchor
+                    p_anc_xy = self._anchor_tcp[:2] if self._anchor_tcp is not None else np.zeros(2)
+                    r_anc_xy = float(np.hypot(p_anc_xy[0], p_anc_xy[1]))
+                    if r_anc_xy > 0.03:
+                        theta_arm_home = float(np.arctan2(p_anc_xy[1], p_anc_xy[0]))
+                    elif self._anchor_theta_arm is not None:
+                        theta_arm_home = float(self._anchor_theta_arm)
+                    else:
+                        theta_arm_home = 0.0
+                    a_roll_home = np.array([np.cos(theta_arm_home), np.sin(theta_arm_home), 0.0], dtype=np.float64)
+                    a_pitch_home = np.array([-np.sin(theta_arm_home), np.cos(theta_arm_home), 0.0], dtype=np.float64)
+                    a_yaw_home = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-            A_yaw = self._clock_u_up             # Trục 1: Thẳng đứng mặt bàn [0, 0, 1]^T
-            A_roll = self._clock_u_radial        # Trục 2: Hướng vươn ngang từ tâm Base đến TCP
-            A_pitch = self._clock_u_tangential    # Trục 3: Trục ngang vuông góc tuyệt đối = A_yaw x A_roll
+                    self._e_yaw_local = self._R_home.inv().apply(a_yaw_home)
+                    self._e_pitch_local = self._R_home.inv().apply(a_pitch_home)
+                    self._e_roll_local = self._R_home.inv().apply(a_roll_home)
+                    norm_ey = np.linalg.norm(self._e_yaw_local)
+                    if norm_ey > 1e-6:
+                        self._e_yaw_local /= norm_ey
+                    norm_ep = np.linalg.norm(self._e_pitch_local)
+                    if norm_ep > 1e-6:
+                        self._e_pitch_local /= norm_ep
+                    norm_er = np.linalg.norm(self._e_roll_local)
+                    if norm_er > 1e-6:
+                        self._e_roll_local /= norm_er
+
+                u_yaw = R_r_anchor.apply(self._e_yaw_local)
+                u_pitch = R_r_anchor.apply(self._e_pitch_local)
+                u_roll = R_r_anchor.apply(self._e_roll_local)
+                self._clock_u_up = u_yaw / max(float(np.linalg.norm(u_yaw)), 1e-6)
+                self._clock_u_tangential = u_pitch / max(float(np.linalg.norm(u_pitch)), 1e-6)
+                self._clock_u_radial = u_roll / max(float(np.linalg.norm(u_roll)), 1e-6)
+                self._clock_u_tool = np.copy(self._clock_u_radial)
+
+            A_yaw = self._clock_u_up             # Trục 1: Gập cổ tay trái / phải (bám động theo mặt phẳng yaw của tool)
+            A_roll = self._clock_u_radial        # Trục 2: Vặn chìa khóa (bám động theo hướng mũi roll của tool)
+            A_pitch = self._clock_u_tangential    # Trục 3: Uống nước / Đặt cốc (bám động theo bản lề pitch của tool)
 
             if self._locked_axis_idx == 2:
                 # Nhánh Trục 1 — Gập cổ tay trái / phải (yaw_input thắng => Yaw quanh A_yaw):
