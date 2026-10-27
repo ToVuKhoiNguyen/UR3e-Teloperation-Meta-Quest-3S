@@ -848,7 +848,7 @@ class DeltaPoseSource:
                 elif self._locked_axis_idx == 0:  # Roll
                     max_limit = getattr(self, "max_roll_rotation_delta", float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(85.0)))))
                 elif self._locked_axis_idx == 1:  # Pitch
-                    max_limit = getattr(self, "max_pitch_rotation_delta", float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(65.0)))))
+                    max_limit = getattr(self, "max_pitch_rotation_delta", float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(85.0)))))
                 else:
                     max_limit = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
 
@@ -1118,22 +1118,9 @@ class DeltaPoseSource:
 
     def clamp_axis_rotation(self, axis_idx: Optional[int], theta_limit: float):
         """
-        Kẹp cứng góc xoay mục tiêu dọc theo trục đang khóa (Dynamic Limit Clamping with Zero Windup):
-        - Không cho phép góc quay vượt quá theta_limit vừa chạm tới.
-        - Tự động phân loại biên dương / biên âm dựa trên dấu của theta_limit.
+        No-op: Giữ nguyên dải quay tự nhiên của người dùng, không kẹp giảm input.
         """
-        if axis_idx is None:
-            axis_idx = self._locked_axis_idx
-        if axis_idx is None:
-            return
-        axis_idx = int(axis_idx)
-        theta_lim = float(theta_limit)
-        if theta_lim > 0.05:
-            cur_max = self._axis_theta_max_pos.get(axis_idx, float('inf'))
-            self._axis_theta_max_pos[axis_idx] = min(cur_max, theta_lim)
-        elif theta_lim < -0.05:
-            cur_min = self._axis_theta_min_neg.get(axis_idx, float('-inf'))
-            self._axis_theta_min_neg[axis_idx] = max(cur_min, theta_lim)
+        pass
 
     def clamp_rotation_anchor(self, achieved_quat_wxyz):
         """

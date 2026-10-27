@@ -998,104 +998,12 @@ class TeleoperationController:
         if result_ik["q"] is not None:
             q_target = result_ik["q"]
             is_sliding = result_ik.get("sliding_on_barrier", False)
-            at_joint_limit = result_ik.get("at_joint_limit", False) or result_ik.get("body_swing_blocked", False)
+            at_joint_limit = result_ik.get("at_joint_limit", False)
 
-            # ── Pure Rotation Boundary Guard (Input Angle Clamping & Zero Windup) ──
             if is_pure_rotation:
-                R_orig = self._rot_origin_R
-                if R_orig is None or not isinstance(R_orig, R):
-                    fk_0 = self._solver.fk(q_real)
-                    qw0 = fk_0["quat"]
-                    R_orig = R.from_quat([qw0[1], qw0[2], qw0[3], qw0[0]])
-                    self._rot_origin_R = R_orig
+                self._last_pure_valid_q = np.array(q_target, dtype=float)
 
-                R_target = R.from_quat([q_clamped[1], q_clamped[2], q_clamped[3], q_clamped[0]])
-                delta_R_target = R_target * R_orig.inv()
-                omega_target = delta_R_target.as_rotvec()
-
-                u_locked = self._rot_locked_axis
-                if u_locked is None or not isinstance(u_locked, np.ndarray) or u_locked.shape != (3,):
-                    norm_om = float(np.linalg.norm(omega_target))
-                    if norm_om > 1e-4:
-                        u_locked = omega_target / norm_om
-                    else:
-                        u_locked = np.array([0.0, 0.0, 1.0], dtype=float)
-                else:
-                    norm_u = np.linalg.norm(u_locked)
-                    u_locked = u_locked / (norm_u if norm_u > 1e-6 else 1.0)
-
-                theta_desired = float(np.dot(omega_target, u_locked))
-
-                lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
-                upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-                SAFE_EPS = 1e-3
-                MAX_BASE_YAW_COMPENSATION = float(os.environ.get("MAX_BASE_YAW_COMPENSATION", str(np.deg2rad(20.0))))
-                MAX_ROT_POS_ERR = float(os.environ.get("MAX_ROT_POS_ERR", "0.015"))  # 15 mm
-                p_anchor = np.array(self._arm_anchor_p if self._arm_anchor_p is not None else user_cmd_p, dtype=float)
-
-                def is_pure_rotation_candidate_valid(q_eval):
-                    # 1. Hard physical joint limit check
-                    if np.any(q_eval < lower_limits + SAFE_EPS) or np.any(q_eval > upper_limits - SAFE_EPS):
-                        return False
-                    # 2. Base joint excursion check: q[0] within MAX_BASE_YAW_COMPENSATION (20 deg)
-                    if self._arm_anchor_q is not None:
-                        if abs(q_eval[0] - self._arm_anchor_q[0]) > MAX_BASE_YAW_COMPENSATION:
-                            return False
-                    # 3. Position hold check: FK pos vs p_anchor within 15mm
-                    fk_ev = self._solver.fk(q_eval)
-                    pos_err = np.linalg.norm(np.array(fk_ev["pos"]) - p_anchor)
-                    if pos_err > MAX_ROT_POS_ERR:
-                        return False
-                    # 4. Collision check
-                    self_m = self._solver.check_self_collision(q_eval, verbose=False)
-                    if not self_m.get("safe", True):
-                        return False
-                    tbl_m = self._solver.check_table_collision(q_eval, tcp_safe_clearance=0.0, cam_safe_clearance=0.0)
-                    if not tbl_m.get("safe", True):
-                        return False
-                    return True
-
-                q_cand_arr = np.array(q_target, dtype=float)
-                cand_ok = is_pure_rotation_candidate_valid(q_cand_arr)
-
-                if cand_ok and not at_joint_limit:
-                    at_joint_limit = False
-                    self._last_pure_valid_q = np.copy(q_cand_arr)
-                    self._last_pure_theta = theta_desired
-                else:
-                    at_joint_limit = True
-                    q_base = np.array(self._last_pure_valid_q if self._last_pure_valid_q is not None else q_real, dtype=float)
-                    q_low = q_base
-                    q_high = q_cand_arr
-                    theta_valid = self._last_pure_theta
-                    for _ in range(4):
-                        q_mid = 0.5 * (q_low + q_high)
-                        if is_pure_rotation_candidate_valid(q_mid):
-                            q_low = q_mid
-                        else:
-                            q_high = q_mid
-                    q_target = q_low.tolist()
-                    self._last_pure_valid_q = np.copy(q_target)
-
-                    # Inform pose source to clamp rotation target along locked axis (Zero Windup)
-                    if self._pose is not None:
-                        locked_idx = getattr(self._pose, "_locked_axis_idx", None)
-                        if isinstance(locked_idx, (int, np.integer)):
-                            if hasattr(self._pose, "clamp_axis_rotation"):
-                                self._pose.clamp_axis_rotation(locked_idx, theta_valid)
-                        elif hasattr(self._pose, "clamp_rotation_anchor"):
-                            fk_lim = self._solver.fk(q_target)
-                            self._pose.clamp_rotation_anchor(fk_lim["quat"])
-
-                    # Keep _smoothed_quat purely on the locked axis at theta_valid
-                    rot_vec = np.asarray(theta_valid * u_locked, dtype=float).flatten()
-                    if rot_vec.shape != (3,):
-                        rot_vec = np.array([0.0, 0.0, float(theta_valid)], dtype=float)
-                    R_pure_bound = R.from_rotvec(rot_vec) * R_orig
-                    q_pb_xyzw = R_pure_bound.as_quat()
-                    self._smoothed_quat = np.array([q_pb_xyzw[3], q_pb_xyzw[0], q_pb_xyzw[1], q_pb_xyzw[2]])
-
-            # Target Projection & Re-anchoring to prevent integrator windup when sliding or touching joint limit
+            # Target Projection & Re-anchoring to prevent integrator windup when sliding or touching true joint limit
             if (is_sliding or at_joint_limit) and self._pose is not None:
                 self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
 
@@ -1180,16 +1088,10 @@ class TeleoperationController:
                 lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
                 upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
                 SAFE_EPS = 1e-3
-                LIMIT_ZONE = 0.05
-                if is_pure_rotation:
-                    if np.any(np.array(q_target) < lower_limits + SAFE_EPS) or np.any(np.array(q_target) > upper_limits - SAFE_EPS):
-                        if self._last_pure_valid_q is not None:
-                            q_target = list(self._last_pure_valid_q)
-                        at_joint_limit = True
-                else:
-                    q_target = np.clip(q_target, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
-                    at_joint_limit = at_joint_limit or bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
-                                                                   (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
+                LIMIT_ZONE = 0.025
+                q_target = np.clip(q_target, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
+                at_joint_limit = at_joint_limit or bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
+                                                               (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
 
                 self._prev_dq = limited_dq
 
@@ -1248,18 +1150,15 @@ class TeleoperationController:
                     tag = "JOINT LIMIT"
 
                 if tag == "JOINT LIMIT":
-                    if is_pure_rotation:
-                        if self._last_pure_valid_q is not None:
-                            q_target = list(self._last_pure_valid_q)
-                        at_joint_limit = True
-                    else:
-                        # Per-joint soft clamping: Never abort execution on joint limits!
-                        # Clamped joint stays at boundary, remaining joints continue tracking
-                        lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
-                        upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-                        SAFE_EPS = 1e-3
-                        q_target = np.clip(q_target, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
-                        at_joint_limit = True
+                    # Per-joint soft clamping: Never abort execution on joint limits!
+                    # Clamped joint stays at boundary, remaining joints continue tracking
+                    lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
+                    upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
+                    SAFE_EPS = 1e-3
+                    LIMIT_ZONE = 0.025
+                    q_target = np.clip(q_target, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
+                    at_joint_limit = bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
+                                                 (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
                 else:
                     self._apply_anti_windup_reanchor(p_curr, q_curr_wxyz)
                     self._apply_smooth_braking_and_send(tag, reason, q_real, q_target, result_ik, pose)
@@ -1319,20 +1218,28 @@ class TeleoperationController:
         is_near_sing = bool(sing_info and sing_info.get("singular", False))
         sing_types = sing_info.get("types", []) if sing_info else []
 
-        other_joint_at_limit = False
-        if at_joint_limit:
-            lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
-            upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-            for idx in range(6):
-                if (q_target[idx] <= lower_limits[idx] + 0.05) or (q_target[idx] >= upper_limits[idx] - 0.05):
-                    other_joint_at_limit = True
-                    break
+        lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
+        upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
+        LIMIT_ZONE = 0.025  # Limit zone for flagging true physical JOINT LIMIT status (25 mrad ~ 1.4 deg)
+        is_true_joint_limit = bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
+                                          (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
+
+        # Extreme orientation reach boundary detection (when pure rotation target exceeds reachable envelope by > 60 deg)
+        is_rot_reach_limit = False
+        if is_pure_rotation and self._last_valid_q is not None:
+            fk_t = self._solver.fk(q_target)
+            q_t_xyzw = [fk_t["quat"][1], fk_t["quat"][2], fk_t["quat"][3], fk_t["quat"][0]]
+            q_cmd_xyzw = [raw_q_norm[1], raw_q_norm[2], raw_q_norm[3], raw_q_norm[0]]
+            dot_rot = min(1.0, max(-1.0, abs(float(np.dot(q_t_xyzw, q_cmd_xyzw)))))
+            rot_err_rad = 2.0 * math.acos(dot_rot)
+            if rot_err_rad > 1.05:  # > 60 deg unreachable orientation discrepancy
+                is_rot_reach_limit = True
 
         if not self_chk.get("safe", True) or self_chk.get("min_dist", 1.0) <= getattr(self._solver, "clearance_threshold", 0.01) + 0.0005:
             new_status = "SELF COLLISION"
         elif not tbl_chk.get("safe", True) or tbl_chk.get("min_clearance", 1.0) <= 0.001:
             new_status = "ENV COLLISION"
-        elif at_joint_limit or other_joint_at_limit:
+        elif is_true_joint_limit or is_rot_reach_limit:
             new_status = "JOINT LIMIT"
         elif is_near_sing:
             if "WRIST" in sing_types:

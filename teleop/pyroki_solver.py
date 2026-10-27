@@ -994,32 +994,49 @@ class PyrokiIKSolver:
                 dq_clamped[3:] = delta_q_raw[3:] * (MAX_WRIST_STEP / wrist_max)
 
             # Khi đang ở chế độ xoay thuần túy hoặc tịnh tiến:
-            # Scaled Vector Rate Limiting co giãn đồng đều cả 3 khớp thân để bảo toàn hướng vector
-            # và cho phép q1 (shoulder), q2 (elbow) co duỗi bù tâm tool0 mượt mà không bị kẹt cứng
+            # Điều tiết mềm mại chuyển động khớp thân (Soft Regularization):
+            # 1. Khi đang xoay tại chỗ (is_pure_rot):
+            #    - Giới hạn vận tốc bước nhảy per-frame của khớp đế base (q0) ở mức vừa phải (MAX_BASE_STEP_ROT)
+            #      để chống hiện tượng thân máy văng đột ngột với tốc độ cao.
+            #    - Cho phép q1 (shoulder) và q2 (elbow) di chuyển tự do theo nghiệm IK để co duỗi bù tâm tool0 mượt mà.
+            # 2. Khi tịnh tiến hoặc phối hợp: Scaled Vector Rate Limiting co giãn đồng đều cả 3 khớp thân.
             if is_pure_rot:
-                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP_ROT", "0.020"))
+                MAX_BASE_STEP = float(os.environ.get("MAX_BASE_STEP_ROT", "0.015"))  # ~0.86°/step (~17.2°/s at 20Hz)
+                dq_clamped[0] = np.clip(delta_q_raw[0], -MAX_BASE_STEP, MAX_BASE_STEP)
+                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.078"))
+                arm_max = float(np.max(np.abs(delta_q_raw[1:3])))
+                if arm_max > MAX_BODY_STEP:
+                    dq_clamped[1:3] = delta_q_raw[1:3] * (MAX_BODY_STEP / arm_max)
             else:
                 MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.078"))  # +30% (0.060 -> 0.078 rad/step ~ 4.47°/step)
-            body_max = float(np.max(np.abs(delta_q_raw[:3])))
-            if body_max > MAX_BODY_STEP:
-                dq_clamped[:3] = delta_q_raw[:3] * (MAX_BODY_STEP / body_max)
+                body_max = float(np.max(np.abs(delta_q_raw[:3])))
+                if body_max > MAX_BODY_STEP:
+                    dq_clamped[:3] = delta_q_raw[:3] * (MAX_BODY_STEP / body_max)
+
+            # Kiểm tra chống nhảy nhánh nghiệm (Anti-Branch-Jump):
+            # Nếu trong 1 frame đơn lẻ (50ms) có cú nhảy đột biến bất thường (|dq| > 15° ~ 0.26 rad),
+            # kẹp bước nhảy dq theo Slew-Rate để tay máy di chuyển mượt mà, không giật nảy.
+            BRANCH_JUMP_LIMIT = float(os.environ.get("MAX_BRANCH_JUMP", "0.26"))  # ~15 deg
+            for b_i in range(3):
+                if abs(dq_clamped[b_i]) > BRANCH_JUMP_LIMIT:
+                    dq_clamped[b_i] = math.copysign(BRANCH_JUMP_LIMIT, dq_clamped[b_i])
 
             q_candidate = (np.array(ref_seed) + dq_clamped).tolist()
 
-            # Ràng buộc cơ chế Chống Vặn Thân Máy (Arm Anchor):
-            # Khớp q1, q2 co duỗi tối thiểu để giữ tâm tool0 đứng yên
-            # Khớp base q0 và thân máy tuyệt đối không được swing/reconfigure lệch khỏi anchor
-            body_swing_blocked = False
+            # Giữ thân máy ổn định mềm mại quanh mỏ neo khi chỉ xoay tại chỗ (Soft Arm Anchor Regularization):
+            # Khớp q0 (base) và thân máy không bị văng lệch khỏi mỏ neo khi xoay cổ tay,
+            # nhưng tuyệt đối KHÔNG kích hoạt cờ JOINT LIMIT giả và KHÔNG hủy nghiệm.
             if is_pure_rot or arm_anchor is not None:
                 anchor_body = np.array(arm_anchor[:3] if arm_anchor is not None else ref_seed[:3], dtype=float)
-                EXCURSION_LIMITS = np.array([0.012, 0.018, 0.018], dtype=float)
+                EXCURSION_LIMITS = np.array([0.013, 0.018, 0.018], dtype=float)
                 body_err = np.abs(np.array(q_candidate[:3]) - anchor_body)
                 if np.any(body_err >= EXCURSION_LIMITS - 1e-4):
-                    body_swing_blocked = True
                     scale_excursion = float(np.min(EXCURSION_LIMITS / np.maximum(body_err, 1e-6)))
                     scale_excursion = min(1.0, max(0.0, scale_excursion))
                     for b_i in range(3):
                         q_candidate[b_i] = float(anchor_body[b_i] + (q_candidate[b_i] - anchor_body[b_i]) * scale_excursion)
+
+            body_swing_blocked = False
 
             # Post-solve FK position error check
             fk_check = self.fk(q_candidate)
@@ -1032,16 +1049,10 @@ class PyrokiIKSolver:
             upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
             SAFE_EPS = 1e-3
 
-            LIMIT_ZONE = 0.03  # Limit zone for flagging JOINT LIMIT status (30 mrad)
-            if is_pure_rot:
-                has_limit_violation = bool(np.any((np.array(q_candidate) <= lower_limits + SAFE_EPS) |
-                                                  (np.array(q_candidate) >= upper_limits - SAFE_EPS)))
-                at_joint_limit = has_limit_violation or body_swing_blocked
-                clamped_norm_q = q_candidate
-            else:
-                clamped_norm_q = np.clip(q_candidate, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
-                at_joint_limit = bool(np.any((np.array(clamped_norm_q) <= lower_limits + LIMIT_ZONE) |
-                                             (np.array(clamped_norm_q) >= upper_limits - LIMIT_ZONE))) or body_swing_blocked
+            LIMIT_ZONE = 0.025  # Limit zone for flagging true physical JOINT LIMIT status (25 mrad ~ 1.4 deg)
+            clamped_norm_q = np.clip(q_candidate, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
+            at_joint_limit = bool(np.any((np.array(clamped_norm_q) <= lower_limits + LIMIT_ZONE) |
+                                         (np.array(clamped_norm_q) >= upper_limits - LIMIT_ZONE)))
 
             # Collision safety check (Self-collision & Table-collision) at 0.0mm threshold (WYSIWYG)
             self_chk = self.check_self_collision(norm_q, verbose=False)
@@ -1110,14 +1121,10 @@ class PyrokiIKSolver:
                     is_scaled = True
 
                 # Step 1 Requirement: Per-joint clamping on q_cmd to ensure strict compliance
-                if is_pure_rot:
-                    has_lim = bool(np.any((np.array(q_cmd) <= lower_limits + SAFE_EPS) | (np.array(q_cmd) >= upper_limits - SAFE_EPS)))
-                    at_joint_limit = at_joint_limit or has_lim or body_swing_blocked
-                else:
-                    q_cmd_clamped = np.clip(q_cmd, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
-                    at_joint_limit = at_joint_limit or bool(np.any((np.array(q_cmd_clamped) <= lower_limits + LIMIT_ZONE) |
-                                                                   (np.array(q_cmd_clamped) >= upper_limits - LIMIT_ZONE))) or body_swing_blocked
-                    q_cmd = q_cmd_clamped
+                q_cmd_clamped = np.clip(q_cmd, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
+                at_joint_limit = bool(np.any((np.array(q_cmd_clamped) <= lower_limits + LIMIT_ZONE) |
+                                             (np.array(q_cmd_clamped) >= upper_limits - LIMIT_ZONE)))
+                q_cmd = q_cmd_clamped
 
                 # Strict post-clamp verification: ensure clamped configuration never penetrates
                 self_cmd_final = self.check_self_collision(q_cmd, verbose=False)
@@ -1125,7 +1132,7 @@ class PyrokiIKSolver:
                 if not (self_cmd_final["safe"] and tbl_cmd_final["safe"]):
                     q_cmd = ref_seed
 
-                is_sliding = (pos_err >= 0.018) or at_joint_limit or body_swing_blocked
+                is_sliding = (pos_err >= 0.018) or at_joint_limit
 
                 # Singularity detection for the accepted solution
                 sing_info = self.check_singularity(q_cmd)
