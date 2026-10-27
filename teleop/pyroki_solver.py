@@ -979,63 +979,8 @@ class PyrokiIKSolver:
             raw_q = np.array(sol_q, dtype=float).tolist()
             norm_q = normalize_to_current(raw_q, ref_seed)
 
-            # Smooth Per-Joint Step Limiting: Preserves C1 velocity continuity & Cartesian line-of-motion
-            delta_q_raw = np.array(norm_q) - np.array(ref_seed)
-            dq_clamped = np.copy(delta_q_raw)
-
-            # Bảo vệ khớp khuỷu (elbow) gần 0 rad để triệt tiêu branch-flip và nổ Jacobian
-            if abs(ref_seed[2]) < 0.08:
-                dq_clamped[2] = np.clip(delta_q_raw[2], -0.06, 0.06)
-
-            # Giới hạn bước nhảy góc xoay cổ tay per-frame để triệt tiêu hoàn toàn giật cục và xoắn gập:
-            MAX_WRIST_STEP = float(os.environ.get("MAX_WRIST_STEP", "0.14"))  # rad/step (~8.0°/step)
-            wrist_max = float(np.max(np.abs(delta_q_raw[3:])))
-            if wrist_max > MAX_WRIST_STEP:
-                dq_clamped[3:] = delta_q_raw[3:] * (MAX_WRIST_STEP / wrist_max)
-
-            # Khi đang ở chế độ xoay thuần túy hoặc tịnh tiến:
-            # Điều tiết mềm mại chuyển động khớp thân (Soft Regularization):
-            # 1. Khi đang xoay tại chỗ (is_pure_rot):
-            #    - Giới hạn vận tốc bước nhảy per-frame của khớp đế base (q0) ở mức vừa phải (MAX_BASE_STEP_ROT)
-            #      để chống hiện tượng thân máy văng đột ngột với tốc độ cao.
-            #    - Cho phép q1 (shoulder) và q2 (elbow) di chuyển tự do theo nghiệm IK để co duỗi bù tâm tool0 mượt mà.
-            # 2. Khi tịnh tiến hoặc phối hợp: Scaled Vector Rate Limiting co giãn đồng đều cả 3 khớp thân.
-            if is_pure_rot:
-                MAX_BASE_STEP = float(os.environ.get("MAX_BASE_STEP_ROT", "0.015"))  # ~0.86°/step (~17.2°/s at 20Hz)
-                dq_clamped[0] = np.clip(delta_q_raw[0], -MAX_BASE_STEP, MAX_BASE_STEP)
-                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.078"))
-                arm_max = float(np.max(np.abs(delta_q_raw[1:3])))
-                if arm_max > MAX_BODY_STEP:
-                    dq_clamped[1:3] = delta_q_raw[1:3] * (MAX_BODY_STEP / arm_max)
-            else:
-                MAX_BODY_STEP = float(os.environ.get("MAX_BODY_STEP", "0.078"))  # +30% (0.060 -> 0.078 rad/step ~ 4.47°/step)
-                body_max = float(np.max(np.abs(delta_q_raw[:3])))
-                if body_max > MAX_BODY_STEP:
-                    dq_clamped[:3] = delta_q_raw[:3] * (MAX_BODY_STEP / body_max)
-
-            # Kiểm tra chống nhảy nhánh nghiệm (Anti-Branch-Jump):
-            # Nếu trong 1 frame đơn lẻ (50ms) có cú nhảy đột biến bất thường (|dq| > 15° ~ 0.26 rad),
-            # kẹp bước nhảy dq theo Slew-Rate để tay máy di chuyển mượt mà, không giật nảy.
-            BRANCH_JUMP_LIMIT = float(os.environ.get("MAX_BRANCH_JUMP", "0.26"))  # ~15 deg
-            for b_i in range(3):
-                if abs(dq_clamped[b_i]) > BRANCH_JUMP_LIMIT:
-                    dq_clamped[b_i] = math.copysign(BRANCH_JUMP_LIMIT, dq_clamped[b_i])
-
-            q_candidate = (np.array(ref_seed) + dq_clamped).tolist()
-
-            # Giữ thân máy ổn định mềm mại quanh mỏ neo khi chỉ xoay tại chỗ (Soft Arm Anchor Regularization):
-            # Khớp q0 (base) và thân máy không bị văng lệch khỏi mỏ neo khi xoay cổ tay,
-            # nhưng tuyệt đối KHÔNG kích hoạt cờ JOINT LIMIT giả và KHÔNG hủy nghiệm.
-            if is_pure_rot or arm_anchor is not None:
-                anchor_body = np.array(arm_anchor[:3] if arm_anchor is not None else ref_seed[:3], dtype=float)
-                EXCURSION_LIMITS = np.array([0.013, 0.018, 0.018], dtype=float)
-                body_err = np.abs(np.array(q_candidate[:3]) - anchor_body)
-                if np.any(body_err >= EXCURSION_LIMITS - 1e-4):
-                    scale_excursion = float(np.min(EXCURSION_LIMITS / np.maximum(body_err, 1e-6)))
-                    scale_excursion = min(1.0, max(0.0, scale_excursion))
-                    for b_i in range(3):
-                        q_candidate[b_i] = float(anchor_body[b_i] + (q_candidate[b_i] - anchor_body[b_i]) * scale_excursion)
-
+            # Khôi phục luồng nghiệm IK chuẩn xác nguyên bản từ PyRoki JIT (bảo toàn 100% Jacobian 6 khớp)
+            q_candidate = norm_q
             body_swing_blocked = False
 
             # Post-solve FK position error check

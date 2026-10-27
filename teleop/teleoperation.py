@@ -192,7 +192,7 @@ class SafetyGate:
                     "damping": 0.0
                 }
 
-        # Singularity Guard sigma check: Smooth continuous damping instead of hard binary cutoff
+        # Singularity Guard sigma check: Khôi phục chuẩn stable-22-10-chieu-demo-robot
         sigma = 1.0
         damping = 1.0
         if hasattr(self, "_guard") and self._guard is not None and hasattr(self._guard, "metrics_calc"):
@@ -201,10 +201,15 @@ class SafetyGate:
                     torch.tensor([q], device=self._guard.metrics_calc.device)
                 )
                 sigma = m["sigma_min"].item()
+                if sigma < self._guard.danger_threshold:
+                    return {"pass": False, "reason": f"singularity(σ={sigma:.4f})", "sigma_min": sigma, "damping": 0.0}
+
+                # Continuous Singularity Damping: Khi tiến gần biên kỳ dị (danger < sigma < warn),
+                # tự động hãm vận tốc mượt mà thay vì phanh chết đột ngột
                 if sigma < self._guard.warn_threshold:
-                    t = (sigma - 0.005) / max(self._guard.warn_threshold - 0.005, 1e-4)
+                    t = (sigma - self._guard.danger_threshold) / max(self._guard.warn_threshold - self._guard.danger_threshold, 1e-4)
                     t = max(0.0, min(1.0, t))
-                    damping = 0.70 + 0.30 * (t * t * (3.0 - 2.0 * t))
+                    damping = 0.45 + 0.55 * (t * t * (3.0 - 2.0 * t))
             except Exception:
                 pass
 
@@ -1056,12 +1061,17 @@ class TeleoperationController:
 
                 e = np.array(q_target) - np.array(self._last_valid_q)
                 abs_e = np.abs(e)
-                sign_e = np.sign(e)
+                max_e = float(np.max(abs_e))
 
-                # Exact discrete-time soft braking velocity envelope:
-                # v_allow = -a/2 + sqrt(a^2/4 + 2*a*|e|)
-                v_allow = -0.5 * A_MAX + np.sqrt(0.25 * A_MAX**2 + 2.0 * A_MAX * abs_e)
-                desired_dq = sign_e * np.minimum(V_MAX_eff, np.minimum(abs_e, v_allow))
+                # Exact discrete-time soft braking velocity envelope with Proportional Vector Scaling:
+                # Bảo toàn 100% tỷ lệ giữa 6 khớp để giữ nguyên hướng vector chuyển động, chống tự động gập/nghiêng
+                if max_e > 1e-6:
+                    v_allow_scalar = -0.5 * A_MAX + np.sqrt(0.25 * A_MAX**2 + 2.0 * A_MAX * max_e)
+                    v_cmd_scalar = min(V_MAX_eff, min(max_e, v_allow_scalar))
+                    scale_e = v_cmd_scalar / max_e
+                    desired_dq = e * scale_e
+                else:
+                    desired_dq = np.zeros(6, dtype=float)
 
                 delta_acc = desired_dq - self._prev_dq
 
@@ -1079,7 +1089,8 @@ class TeleoperationController:
 
                 # Prevent overshoot past target if approaching target closely
                 for i in range(6):
-                    if abs(e[i]) > 1e-6 and (limited_dq[i] * sign_e[i] > abs_e[i]):
+                    sign_ei = math.copysign(1.0, e[i]) if abs(e[i]) > 1e-6 else 0.0
+                    if abs(e[i]) > 1e-6 and (limited_dq[i] * sign_ei > abs(e[i])):
                         limited_dq[i] = e[i]
 
                 q_target = (np.array(self._last_valid_q) + limited_dq).tolist()

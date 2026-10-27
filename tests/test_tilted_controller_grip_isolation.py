@@ -98,8 +98,8 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         p0 = pose_source.get_pose()
         self.assertIsNone(p0, "Frame đầu bóp Grip phải chốt mỏ neo và trả về None")
 
-        # Người dùng vặn chìa khóa 25° theo chiều kim đồng hồ quanh trục dọc tay cầm (-Z local)
-        R_roll_local = R.from_rotvec([0.0, 0.0, -math.radians(25.0)])
+        # Người dùng vặn chìa khóa 25° theo chiều kim đồng hồ quanh trục cẳng tay (-X local)
+        R_roll_local = R.from_rotvec([-math.radians(25.0), 0.0, 0.0])
         R_hand_roll = R_natural * R_roll_local
         q_roll = R_hand_roll.as_quat()
 
@@ -158,8 +158,8 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         })
         pose_source.get_pose()
 
-        # Gập cổ tay 20° xuống quanh trục ngang tay cầm (+X local)
-        R_pitch_local = R.from_rotvec([math.radians(20.0), 0.0, 0.0])
+        # Gập cổ tay 20° xuống quanh trục ngang tay cầm (+Z local)
+        R_pitch_local = R.from_rotvec([0.0, 0.0, math.radians(20.0)])
         R_hand_pitch = R_natural * R_pitch_local
         q_pitch = R_hand_pitch.as_quat()
 
@@ -267,7 +267,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         src_roll = DeltaPoseSource(server, ctrl, scale=1.0, anchor_reference_func=lambda: list(ctrl.tcp()))
         server.set_frame({"pos": [0,0,0], "quat": [1,0,0,0], "head_quat": [1,0,0,0], "trigger": False, "grip": True})
         src_roll.get_pose()
-        q_r = R.from_rotvec([0, 0, -math.radians(20.0)]).as_quat()
+        q_r = R.from_rotvec([-math.radians(20.0), 0, 0]).as_quat()
         server.set_frame({"pos": [0,0,0], "quat": [q_r[3], q_r[0], q_r[1], q_r[2]], "head_quat": [1,0,0,0], "trigger": False, "grip": True})
         for _ in range(10): p_r = src_roll.get_pose()
         rot_roll = (R.from_quat([p_r["quat"][1], p_r["quat"][2], p_r["quat"][3], p_r["quat"][0]]) * R_origin.inv()).as_rotvec()
@@ -277,7 +277,7 @@ class TestTiltedControllerGripIsolation(unittest.TestCase):
         src_pitch = DeltaPoseSource(server, ctrl, scale=1.0, anchor_reference_func=lambda: list(ctrl.tcp()))
         server.set_frame({"pos": [0,0,0], "quat": [1,0,0,0], "head_quat": [1,0,0,0], "trigger": False, "grip": True})
         src_pitch.get_pose()
-        q_p = R.from_rotvec([math.radians(20.0), 0, 0]).as_quat()
+        q_p = R.from_rotvec([0, 0, math.radians(20.0)]).as_quat()
         server.set_frame({"pos": [0,0,0], "quat": [q_p[3], q_p[0], q_p[1], q_p[2]], "head_quat": [1,0,0,0], "trigger": False, "grip": True})
         for _ in range(10): p_p = src_pitch.get_pose()
         rot_pitch = (R.from_quat([p_p["quat"][1], p_p["quat"][2], p_p["quat"][3], p_p["quat"][0]]) * R_origin.inv()).as_rotvec()

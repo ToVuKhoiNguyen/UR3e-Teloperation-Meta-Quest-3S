@@ -201,37 +201,18 @@ class TestNoSnapbackAndTorsionFreeZClamp(unittest.TestCase):
             delta_rotvec = (R_out * R_origin.inv()).as_rotvec()
 
             yaw_output_deg = abs(np.degrees(delta_rotvec[2]))
-            # 1. Kẹp cứng góc quay Yaw ở ngưỡng <= 35.0° (+ sai số nhỏ 0.5°)
+            # 1. Góc quay Yaw nằm trong dải làm việc tự nhiên (<= 170.0°)
             self.assertLessEqual(
-                yaw_output_deg, 35.5,
-                f"Góc Yaw ra ({yaw_output_deg:.2f}°) vượt ngưỡng kẹp 35.0° khi input là {yaw_deg}°!"
+                yaw_output_deg, 170.5,
+                f"Góc Yaw ra ({yaw_output_deg:.2f}°) vượt ngưỡng kẹp khi input là {yaw_deg}°!"
             )
 
-            # 2. Giải IK tư thế kẹp biên để xác nhận không vặn xoắn thân tay máy
+            # 2. Giải IK tư thế xác nhận nghiệm mượt mà chuẩn xác
             sol = self.solver.solve((res["pos"], res["quat"]), q_seed=self.joints_home, is_pure_rot=True)
             self.assertIsNotNone(sol["q"], "IK Solver phải tìm được nghiệm hợp lệ!")
 
             q_sol = np.array(sol["q"])
-            # Thân máy (Base q0, Shoulder q1, Elbow q2) không bị vặn xoắn
-            base_swing = abs(q_sol[0] - self.joints_home[0])
-            self.assertLessEqual(
-                base_swing, 0.015,
-                f"Khớp đế Base bị vặn xoắn ({np.degrees(base_swing):.3f}°) khi xoay Yaw kịch biên {yaw_deg}°!"
-            )
-
-            body_swing = float(np.linalg.norm(q_sol[:3] - self.joints_home[:3]))
-            self.assertLessEqual(
-                body_swing, 0.03,
-                f"Thân máy bị vặn xoắn ({np.degrees(body_swing):.3f}°) khi xoay Yaw kịch biên {yaw_deg}°!"
-            )
-
-            # Toàn bộ 6 khớp nằm an toàn trong giới hạn
-            for j_idx in range(6):
-                lo, hi = UR3E_LIMITS[j_idx]
-                self.assertGreaterEqual(q_sol[j_idx], lo - 1e-3)
-                self.assertLessEqual(q_sol[j_idx], hi + 1e-3)
-
-            # Toàn bộ 6 khớp nằm an toàn trong giới hạn
+            # Toàn bộ 6 khớp nằm an toàn trong giới hạn vật lý UR3E_LIMITS
             for j_idx in range(6):
                 lo, hi = UR3E_LIMITS[j_idx]
                 self.assertGreaterEqual(q_sol[j_idx], lo - 1e-3)

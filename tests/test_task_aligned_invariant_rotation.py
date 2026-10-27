@@ -111,8 +111,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
             })
             src.get_pose()
 
-            # Gập cổ tay +25° (Pitch quanh u_right)
-            R_pitch_down = R.from_rotvec([math.radians(25.0), 0.0, 0.0])
+            # Gập cổ tay +25° (Pitch quanh trục 2 của tay cầm)
+            R_pitch_down = R.from_rotvec([0.0, 0.0, math.radians(25.0)])
             q_pitch = R_pitch_down.as_quat()
             server.set_frame({
                 "pos": [0.0, 0.0, 0.0], "quat": [q_pitch[3], q_pitch[0], q_pitch[1], q_pitch[2]],
@@ -223,8 +223,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
                 })
                 src.get_pose()
 
-                # Vặn cổ tay sang phải 30° quanh u_fwd = [0, 0, -1]
-                R_wrist_twist = R.from_rotvec([0.0, 0.0, -math.radians(30.0)])
+                # Vặn cổ tay sang phải 30° quanh trục cẳng tay (trục 0 của tay cầm)
+                R_wrist_twist = R.from_rotvec([-math.radians(30.0), 0.0, 0.0])
                 q_twist = R_wrist_twist.as_quat()
                 server.set_frame({
                     "pos": [0.0, 0.0, 0.0], "quat": [q_twist[3], q_twist[0], q_twist[1], q_twist[2]],
@@ -293,8 +293,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         })
         src.get_pose()
 
-        # Multi-axis gesture: Roll 25° (dominant), Pitch 7°, Yaw 5°
-        R_noisy_roll = R.from_rotvec([math.radians(7.0), math.radians(5.0), -math.radians(25.0)])
+        # Multi-axis gesture: Roll 25° (dominant trên trục 0), Pitch 7° (trục 2), Yaw 5° (trục 1)
+        R_noisy_roll = R.from_rotvec([-math.radians(25.0), math.radians(5.0), math.radians(7.0)])
         q_noisy = R_noisy_roll.as_quat()
         server.set_frame({
             "pos": [0.0, 0.0, 0.0], "quat": [q_noisy[3], q_noisy[0], q_noisy[1], q_noisy[2]],
@@ -336,7 +336,7 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         })
         src.get_pose()
 
-        R_noisy_pitch = R.from_rotvec([math.radians(22.0), 0.0, -math.radians(6.0)])
+        R_noisy_pitch = R.from_rotvec([-math.radians(6.0), 0.0, math.radians(22.0)])
         q_np = R_noisy_pitch.as_quat()
         server.set_frame({
             "pos": [0.0, 0.0, 0.0], "quat": [q_np[3], q_np[0], q_np[1], q_np[2]],
@@ -453,8 +453,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         })
         src.get_pose()
 
-        # Vặn cổ tay theo chiều kim đồng hồ quanh trục dọc tay cầm (local Z: -25°)
-        R_twist_local = R.from_rotvec([0.0, 0.0, -math.radians(25.0)])
+        # Vặn cổ tay theo chiều kim đồng hồ quanh trục cẳng tay (local X: -25°)
+        R_twist_local = R.from_rotvec([-math.radians(25.0), 0.0, 0.0])
         R_hand_roll = R_hand_resting * R_twist_local
         q_hr = R_hand_roll.as_quat()
         server.set_frame({
@@ -487,8 +487,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         })
         src.get_pose()
 
-        # Gập cổ tay xuống quanh trục ngang tay cầm (local X: +20°)
-        R_flex_local = R.from_rotvec([math.radians(20.0), 0.0, 0.0])
+        # Gập cổ tay xuống quanh trục ngang tay cầm (local Z: +20°)
+        R_flex_local = R.from_rotvec([0.0, 0.0, math.radians(20.0)])
         R_hand_pitch = R_hand_resting * R_flex_local
         q_hp = R_hand_pitch.as_quat()
         server.set_frame({

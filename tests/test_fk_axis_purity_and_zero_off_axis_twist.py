@@ -376,9 +376,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         q_curr = list(self.home_q)
         R_orig = R.from_quat([q0_wxyz[1], q0_wxyz[2], q0_wxyz[3], q0_wxyz[0]])
 
-        # Roll: rotate hand around Z (longitudinal)
+        # Roll: rotate hand around X (vặn chìa khóa)
         for deg in np.linspace(1, 40, 20):
-            r_hand = R.from_euler('z', -deg, degrees=True)
+            r_hand = R.from_euler('x', -deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -411,9 +411,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         self.teleop.step(self.home_q)
         q_curr = list(self.home_q)
 
-        # Pitch: rotate hand around X (lateral)
+        # Pitch: rotate hand around Z (gập/ngửa cổ tay)
         for deg in np.linspace(1, 35, 20):
-            r_hand = R.from_euler('x', -deg, degrees=True)
+            r_hand = R.from_euler('z', deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],

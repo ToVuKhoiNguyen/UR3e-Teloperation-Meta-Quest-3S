@@ -789,14 +789,14 @@ class DeltaPoseSource:
             omega_local = R_delta_local.as_rotvec()
 
             # 2. Ba thành phần giải phẫu cổ tay theo chuẩn WebXR Grip Space:
-            # - Trục Z (longitudinal): Vặn chìa khóa / Xoay mặt đồng hồ (Wrist Roll / Twist).
-            #   (WebXR: -Z hướng tới trước, vặn phải = clockwise -> -Z => w_roll = -omega_local[2] > 0)
-            # - Trục X (lateral): Gập / Ngửa cổ tay lên xuống (Wrist Pitch / Flexion-Extension).
-            #   (WebXR: +X sang phải, gập xuống -> +X => w_pitch = -omega_local[0] < 0 để chúc đầu máy xuống)
+            # - Trục X (hoán đổi): Vặn chìa khóa / Xoay mặt đồng hồ (Wrist Roll / Twist).
+            #   (Vặn phải = clockwise -> w_roll = -omega_local[0] > 0)
+            # - Trục Z (hoán đổi): Gập / Ngửa cổ tay lên xuống (Wrist Pitch / Flexion-Extension).
+            #   (Ngửa lên -> w_pitch > 0, Gập xuống -> w_pitch = -omega_local[2] < 0)
             # - Trục Y (vertical): Lắc cổ tay Trái / Phải (Wrist Yaw / Radial-Ulnar Deviation).
             #   (WebXR: +Y hướng lên, lắc trái -> +Y => w_yaw = +omega_local[1] > 0 quay trái quanh Z_base)
-            w_roll  = -float(omega_local[2])
-            w_pitch = -float(omega_local[0])
+            w_roll  = -float(omega_local[0])
+            w_pitch = -float(omega_local[2])
             w_yaw   =  float(omega_local[1])
 
             # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
@@ -841,16 +841,16 @@ class DeltaPoseSource:
                 # 4. Giảm tốc độ quay (Angular Scaling: GRIP_ROTATION_GAIN = 0.55) & Kẹp biên độ góc quay tuyệt đối:
                 theta_applied = self.grip_rotation_gain * signed_angle
 
-                # Kẹp biên độ góc quay tuyệt đối (Strict Absolute Angle Clamping) so với mốc gốc ban đầu (_tcp_origin_rot):
-                # Hạn chế tối đa góc quay trục Z (Yaw) không vượt quá ngưỡng an toàn chống vặn xoắn thân máy
+                # Kẹp biên độ góc quay tuyệt đối so với mốc gốc ban đầu (_tcp_origin_rot):
+                # Khôi phục biên độ góc quay tự nhiên, mượt mà chuẩn stable-22-10-chieu-demo-robot
                 if self._locked_axis_idx == 2:  # Yaw (Z)
-                    max_limit = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(75.0))))))
+                    max_limit = getattr(self, "max_z_rotation_delta", float(os.environ.get("MAX_YAW_DELTA", os.environ.get("MAX_Z_ROTATION_DELTA", str(math.radians(170.0))))))
                 elif self._locked_axis_idx == 0:  # Roll
-                    max_limit = getattr(self, "max_roll_rotation_delta", float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(85.0)))))
+                    max_limit = getattr(self, "max_roll_rotation_delta", float(os.environ.get("MAX_ROLL_DELTA", str(math.radians(170.0)))))
                 elif self._locked_axis_idx == 1:  # Pitch
-                    max_limit = getattr(self, "max_pitch_rotation_delta", float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(85.0)))))
+                    max_limit = getattr(self, "max_pitch_rotation_delta", float(os.environ.get("MAX_PITCH_DELTA", str(math.radians(170.0)))))
                 else:
-                    max_limit = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(110.0))))
+                    max_limit = float(os.environ.get("MAX_ROT_ENVELOPE_RAD", str(math.radians(170.0))))
 
                 # Áp dụng giới hạn động từ FK Axis-Purity Guard (Zero Windup Dynamic Clamping)
                 if self._locked_axis_idx in self._axis_theta_max_pos:
