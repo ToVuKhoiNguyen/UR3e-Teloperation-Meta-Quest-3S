@@ -244,14 +244,7 @@ class SyntheticWristCamera:
 
     def add_osd_preview(self, img_rgb: np.ndarray, gripper_closed: bool = False) -> np.ndarray:
         """
-        Tạo bản sao ảnh có gắn nhãn OSD chỉ để hiển thị trực quan lên Viser UI.
-        KHÔNG dùng ảnh này để nạp vào DataLogger/HDF5 (tránh ô nhiễm dữ liệu AI).
+        Trả về khung hình video stream thuần túy sạch 100% (không chèn text hay trạng thái ngàm).
         """
-        annotated = img_rgb.copy()
-        cv2.putText(annotated, "EYE-IN-HAND CAMERA (SIMULATION)", (15, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 50, 50), 1)
-        grip_str = "GRIPPER: CLOSED [1.0]" if gripper_closed else "GRIPPER: OPEN [0.0]"
-        cv2.putText(annotated, grip_str, (15, 45),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 140, 0) if gripper_closed else (120, 120, 120), 1)
-        return annotated
+        return img_rgb.copy()
 

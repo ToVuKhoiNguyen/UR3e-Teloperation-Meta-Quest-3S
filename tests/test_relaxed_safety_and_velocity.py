@@ -121,25 +121,25 @@ class TestRelaxedSafetyAndVelocity(unittest.TestCase):
         print("  -> PASS: Thuật toán giảm chấn mượt hoạt động chuẩn xác theo ngưỡng mới!")
 
     def test_04_cartesian_barrier_table_and_base(self):
-        """Kịch bản 4: Bảo vệ an toàn chống đâm bàn (Z=0.01 -> 0.035m) & chống va chạm thân đế (r_min=0.14m)"""
-        print("\n[Kịch bản 4 - RÀO CHẮN ẢO CHỐNG ĐÂM BÀN & THÂN ĐẾ]")
+        """Kịch bản 4: Bảo vệ an toàn chống đâm bàn (Z=0.020m, cách bàn 1.0cm) & giải phóng cột trụ ảo thân đế (r_min=0.0)"""
+        print("\n[Kịch bản 4 - RÀO CHẮN ẢO CHỐNG ĐÂM BÀN & GIẢI PHÓNG THÂN ĐẾ]")
         
-        # 4a. Ra lệnh chúc TCP xuống Z = 0.01m (quá sát mặt bàn) -> Clamped lên Z = 0.035m
-        pose_plunge = {"pos": [0.25, 0.15, 0.01], "quat": [1.0, 0.0, 0.0, 0.0]}
+        # 4a. Ra lệnh chúc TCP xuống Z = 0.005m (quá sát/xuyên mặt bàn Z=0.01m) -> Clamped lên Z = 0.020m (Z_table_armor WYSIWYG)
+        pose_plunge = {"pos": [0.25, 0.15, 0.005], "quat": [1.0, 0.0, 0.0, 0.0]}
         clamped_plunge = clamp_cartesian_safety(pose_plunge)
         z_clamped = clamped_plunge["pos"][2]
-        print(f"  4a. Lệnh chúc xuống Z = 0.010m -> Clamped an toàn: Z = {z_clamped:.4f}m (>= 0.035m)")
-        self.assertAlmostEqual(z_clamped, 0.035, places=3,
-                               msg=f"Z=0.01m phải được chặn lại ở 0.035m, thực tế là {z_clamped}m!")
+        print(f"  4a. Lệnh chúc xuống Z = 0.005m -> Clamped an toàn: Z = {z_clamped:.4f}m (>= 0.020m, Z_table_armor)")
+        self.assertAlmostEqual(z_clamped, 0.020, places=3,
+                               msg=f"Z=0.005m phải được chặn lại ở 0.020m, thực tế là {z_clamped}m!")
 
-        # 4b. Ra lệnh tiến sát tâm đế R = 0.08m -> Clamped ra R = 0.14m (r_min bất khả xâm phạm)
-        pose_base = {"pos": [0.05, 0.06245, 0.20], "quat": [1.0, 0.0, 0.0, 0.0]} # r = 0.08m
+        # 4b. Ra lệnh tiến sát tâm đế R = 0.05m -> Không bị cản trở bởi r_min (r_min = 0.0m)
+        pose_base = {"pos": [0.03, 0.04, 0.20], "quat": [1.0, 0.0, 0.0, 0.0]} # r = 0.05m
         clamped_base = clamp_cartesian_safety(pose_base)
         r_clamped_base = math.hypot(clamped_base["pos"][0], clamped_base["pos"][1])
-        print(f"  4b. Lệnh áp sát tâm đế R = 0.080m -> Clamped an toàn: R = {r_clamped_base:.4f}m (>= 0.140m)")
-        self.assertAlmostEqual(r_clamped_base, 0.140, places=3,
-                               msg=f"r_min 0.14m bị vi phạm, thực tế là {r_clamped_base}m!")
-        print("  -> PASS: Rào chắn ảo bảo vệ phần cứng hoạt động 100% tin cậy!")
+        print(f"  4b. Lệnh áp sát tâm đế R = 0.050m -> Tự do tiếp cận: R = {r_clamped_base:.4f}m (không bị phanh r_min)")
+        self.assertAlmostEqual(r_clamped_base, 0.050, places=3,
+                               msg=f"R=0.050m không được bị đẩy ra ngoài, thực tế là {r_clamped_base}m!")
+        print("  -> PASS: Rào chắn mặt bàn gọt mỏng 1.0cm an toàn, cột trụ ảo thân đế đã gỡ bỏ hoàn toàn!")
 
 
 if __name__ == "__main__":

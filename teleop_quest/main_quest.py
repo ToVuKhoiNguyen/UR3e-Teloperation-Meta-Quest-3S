@@ -673,14 +673,25 @@ def main():
     # 8. Initialize Performance Profiler & WebXR Watchdog
     profiler = SystemProfiler(window_size=100, print_to_stdout=False)
     _vr_tracking_lost = False
+    q_real = None
+    fk_res = None
 
-    # 9. Main Control Loop (20Hz)
+    # 9. Main Control Loop (Phase-Locked 20.0Hz RTDE Cadence)
+    target_loop_time = time.perf_counter()
     while True:
         loop_start_time = time.perf_counter()
+
+        # Cập nhật FK và góc khớp thật sớm phục vụ watchdog & auto re-anchor
+        try:
+            q_real = ctrl.joints()
+            fk_res = teleop._solver.fk(q_real)
+        except Exception:
+            pass
 
         if is_navigating_home.is_set():
             _was_navigating_home = True
             time.sleep(POLL_SLEEP)
+            target_loop_time = time.perf_counter()
             continue
 
         if _was_navigating_home:
@@ -703,6 +714,29 @@ def main():
             ui.set_status("[HOLD: EMERGENCY_STOP] Triggered from VR")
             quest_server.send_haptic(1.0, 1000)
 
+        # A1. Tự động đồng bộ và khôi phục mốc tham chiếu khi Enter VR / Reconnect mới
+        if quest_server.check_and_clear_new_session():
+            print("[WebXR] New VR session / reconnect detected -> Auto Re-anchoring state without toggling Teleop.")
+            _vr_tracking_lost = False
+            pose_source.reset_anchor()
+            _last_trig_state = False
+            _last_grip_state = False
+            _btn_a_prev = False
+            _btn_b_prev = False
+            _btn_x_prev = False
+            _thumbstick_click_prev = False
+            if q_real is not None:
+                teleop.notify_clutch_released(q_real)
+            if fk_res is not None:
+                widget_pose_source.sync_with_robot(pos=fk_res["pos"], quat=fk_res["quat"])
+            if ui.cb_teleop.value:
+                teleop.enabled = True
+                _last_teleop_state = True
+                quest_server.set_drive_mode(True)
+                executor.connect()
+                if q_real is not None:
+                    teleop._last_valid_q = list(q_real)
+
         # A2. WebXR Watchdog (Monitor WebXR tracking loss > 1.0s)
         last_vr_seen = quest_server.last_seen()
         now_vr_time = time.time()
@@ -711,24 +745,35 @@ def main():
         if last_vr_seen > 0.0 and delta_vr_time > 1.0:
             if not _vr_tracking_lost:
                 _vr_tracking_lost = True
-                print(f"[WebXR Watchdog] Lost VR tracking (> 1.0s, delta={delta_vr_time:.2f}s). Holding robot safely.")
-                executor.stop(10.0)
-                teleop.stop(10.0)
+                print(f"[WebXR Watchdog] Lost VR tracking (> 1.0s, delta={delta_vr_time:.2f}s). Holding robot safely without terminating WebXR session.")
+                # Giữ nguyên robot an toàn tại chỗ mà KHÔNG sập session WebXR và KHÔNG tắt teleop
                 pose_source.reset_anchor()
+                if q_real is not None:
+                    teleop.notify_clutch_released(q_real)
+                if fk_res is not None:
+                    widget_pose_source.sync_with_robot(pos=fk_res["pos"], quat=fk_res["quat"])
                 _btn_a_prev = False
                 _btn_b_prev = False
                 _btn_x_prev = False
                 _thumbstick_click_prev = False
                 _last_trig_state = False
                 _last_grip_state = False
-                # Signal Quest client to cleanup zombie session
-                quest_server.broadcast_reset_session()
                 # Edge-triggered update for Viser UI
                 if (time.time() - gizmo_interaction[0]) >= 0.35 and not is_navigating_home.is_set():
                     ui.set_status("VR LOST")
         elif _vr_tracking_lost and delta_vr_time <= 0.40:
             _vr_tracking_lost = False
             pose_source.reset_anchor()
+            if q_real is not None:
+                teleop.notify_clutch_released(q_real)
+            if fk_res is not None:
+                widget_pose_source.sync_with_robot(pos=fk_res["pos"], quat=fk_res["quat"])
+            _last_trig_state = False
+            _last_grip_state = False
+            if ui.cb_teleop.value:
+                teleop.enabled = True
+                _last_teleop_state = True
+                quest_server.set_drive_mode(True)
             print(f"[WebXR Watchdog] Regained VR tracking (delta={delta_vr_time*1000.0:.1f}ms). Resuming safe control.")
             if (time.time() - gizmo_interaction[0]) >= 0.35 and not is_navigating_home.is_set():
                 ui.set_status("OK")
@@ -740,7 +785,8 @@ def main():
 
         # B. Read state from Quest VR headset
         vr_frame = quest_server.get_frame()
-        if _vr_tracking_lost:
+        is_frame_tracking_lost = bool(vr_frame.get("tracking_lost", False)) if vr_frame else False
+        if _vr_tracking_lost or is_frame_tracking_lost:
             _is_trig = False
             _is_grip = False
             _is_btn_b = False
@@ -1162,8 +1208,13 @@ def main():
         elapsed = time.perf_counter() - loop_start_time
         profiler.tick_frame(elapsed * 1000.0)
 
-        sleep_duration = max(0.001, POLL_SLEEP - elapsed)
-        time.sleep(sleep_duration)
+        target_loop_time += POLL_SLEEP
+        now_cadence = time.perf_counter()
+        sleep_duration = target_loop_time - now_cadence
+        if sleep_duration > 0.0005:
+            time.sleep(sleep_duration)
+        elif sleep_duration < -POLL_SLEEP:
+            target_loop_time = now_cadence
 
 if __name__ == "__main__":
     main()

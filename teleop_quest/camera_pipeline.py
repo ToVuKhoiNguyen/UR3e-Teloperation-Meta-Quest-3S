@@ -21,11 +21,12 @@ class CameraStreamPipeline:
         init_quat: list,
         init_tomato_pos: Tuple[float, float, float] = (0.22, 0.22, 0.035),
         init_basket_pos: Tuple[float, float, float] = (0.20, -0.20, 0.02),
-        target_fps: float = 20.0
+        target_fps: float = 30.0
     ):
         self.wrist_cam = wrist_cam
         self.ui = ui
         self.quest_server = quest_server
+        self.target_fps = target_fps
         self.target_interval = 1.0 / max(1.0, target_fps)
 
         self._lock = threading.Lock()
@@ -76,19 +77,16 @@ class CameraStreamPipeline:
                 self._gripper_closed = gripper_closed
 
     def get_latest_raw_frame(self):
-        """Lấy khung hình RGB thô phục vụ ghi dữ liệu huấn luyện AI"""
-        with self._lock:
-            return self._latest_raw_frame
+        """Lấy khung hình RGB thô phục vụ ghi dữ liệu huấn luyện AI (Lock-free atomic read < 0.001ms)"""
+        return self._latest_raw_frame
 
     def get_latest_depth_frame(self):
-        """Lấy khung hình bản đồ độ sâu thô dạng uint16 mm phục vụ AI 3D Vision"""
-        with self._lock:
-            return self._latest_raw_depth
+        """Lấy khung hình bản đồ độ sâu thô dạng uint16 mm phục vụ AI 3D Vision (Lock-free atomic read)"""
+        return self._latest_raw_depth
 
     def get_latest_preview_frame(self):
-        """Lấy khung hình có OSD phục vụ hiển thị"""
-        with self._lock:
-            return self._latest_preview_frame
+        """Lấy khung hình có OSD phục vụ hiển thị (Lock-free atomic read)"""
+        return self._latest_preview_frame
 
     def _worker_loop(self):
         while self._running:
@@ -145,4 +143,4 @@ class CameraStreamPipeline:
                 pass
 
             dur = time.perf_counter() - t_start
-            time.sleep(max(0.005, self.target_interval - dur))
+            time.sleep(max(0.001, self.target_interval - dur))

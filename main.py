@@ -98,6 +98,11 @@ if __name__ == "__main__":
         except Exception:
             pass
 
+    # Hỗ trợ cờ --disable-self-collision để bypass kiểm tra tự va chạm khi test
+    if "--disable-self-collision" in sys.argv:
+        os.environ["DISABLE_SELF_COLLISION"] = "1"
+        print("[An Toàn] Cờ --disable-self-collision được kích hoạt: TẮT kiểm tra tự va chạm!")
+
     from teleop_quest.main_quest import main
     main()
 

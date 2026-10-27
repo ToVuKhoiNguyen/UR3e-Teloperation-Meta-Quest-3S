@@ -33,6 +33,52 @@
         const elJointPtr = jointIds.map(j => document.getElementById(`ptr-${j}`));
         const elValGripperState = document.getElementById('val-gripper-state');
 
+        // Safe Joint Limits in Degrees (matching UR3E_LIMITS in pyroki_solver.py)
+        const JOINT_LIMITS_DEG = [
+            [-180.0, 180.0],              // Base
+            [-151.8, 11.4],               // Shoulder (-2.65 rad to +0.20 rad)
+            [2.9, 171.8],                 // Elbow (+0.05 rad to +3.00 rad)
+            [-180.0, 180.0],              // Wrist 1
+            [-180.0, 180.0],              // Wrist 2
+            [-180.0, 180.0]               // Wrist 3
+        ];
+
+        // Anti-Fight Lock state (preventing telemetry from fighting user cockpit input)
+        let activeCockpitJoint = -1;
+        let lastCockpitActionTime = 0;
+        let isDraggingTrack = false;
+        let dragJointIdx = -1;
+
+        function degToPercent(deg) {
+            // Thang đo UR [-360 deg, +360 deg] -> range [0%, 100%]
+            return Math.max(0, Math.min(100, ((deg + 360.0) / 720.0) * 100.0));
+        }
+
+        function percentToDeg(pct, jointIdx) {
+            let rawDeg = (pct / 100.0) * 720.0 - 360.0;
+            let limits = JOINT_LIMITS_DEG[jointIdx] || [-180, 180];
+            return Math.max(limits[0], Math.min(limits[1], rawDeg));
+        }
+
+        function sendJointCmd(jointIdx, degVal) {
+            activeCockpitJoint = jointIdx;
+            lastCockpitActionTime = Date.now();
+            let radVal = degVal * (Math.PI / 180.0);
+
+            const payload = JSON.stringify({
+                type: "joint_cmd",
+                joint: jointIdx,
+                deg: degVal,
+                rad: radVal
+            });
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(payload);
+            } else {
+                fetch(`/api/joint_cmd?joint=${jointIdx}&deg=${degVal.toFixed(2)}`, { method: "GET", cache: "no-store" }).catch(() => {});
+            }
+        }
+
         let ws = null;
         let xrSession = null;
         let xrRefSpace = null;
@@ -41,6 +87,8 @@
         let lastDriveTogglePressed = false;
         let gripperClosedState = false;
         let lastGripperRawPressed = false;
+        let lastRecordRawPressed = false;
+        let recordingActiveState = false;
 
         function updateCamDisplay(src) {
             const camImg = document.getElementById('wrist-cam-img');
@@ -114,7 +162,16 @@
 
             // 2. Cập nhật Joint Position (6 joints: Base, Shoulder, Elbow, Wrist 1, Wrist 2, Wrist 3)
             if (data.joints && data.joints.length >= 6) {
+                const now = Date.now();
+                const isCockpitLocked = (now - lastCockpitActionTime < 450);
                 for (let i = 0; i < 6; i++) {
+                    // Chống xung đột (Anti-Fight Lock): Không ghi đè giá trị nếu người dùng đang chỉnh sửa hoặc vừa tương tác
+                    let isEditingThis = (document.activeElement === elJointDeg[i]);
+                    let isLockedThis = isEditingThis || (isCockpitLocked && (activeCockpitJoint === i || activeCockpitJoint === -1));
+                    if (isLockedThis) {
+                        continue;
+                    }
+
                     let rad = data.joints[i];
                     let deg = rad * (180.0 / Math.PI);
                     if (elJointDeg[i]) elJointDeg[i].innerText = deg.toFixed(2);
@@ -142,6 +199,11 @@
             if (elValGripperBtn) {
                 elValGripperBtn.innerText = isGripperClosed ? "Closed (Suction ON)" : "Open (Suction OFF)";
                 elValGripperBtn.className = isGripperClosed ? "badge red" : "badge gray";
+            }
+
+            // 3b. Cập nhật Recording State từ robot telemetry
+            if (typeof data.recording !== 'undefined') {
+                recordingActiveState = Boolean(data.recording);
             }
 
             // 4. Cập nhật Robot Status Badge
@@ -229,6 +291,14 @@
                 statusDiv.classList.add("success");
                 updateRobotStatusBadge("Connected", "green");
                 checkWebXR();
+                if (xrSession && xrRefSpace) {
+                    try {
+                        ws.send(JSON.stringify({
+                            type: "session_start",
+                            t: Date.now() / 1000.0
+                        }));
+                    } catch (e) {}
+                }
             };
 
             ws.onerror = (err) => {
@@ -241,7 +311,10 @@
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'haptic' && xrSession) {
+                    if (data.type === 'reset_session') {
+                        console.warn("[WebXR] Nhận lệnh reset_session từ Server -> Dọn dẹp session sạch");
+                        disposeSession();
+                    } else if (data.type === 'haptic' && xrSession) {
                         for (let source of xrSession.inputSources) {
                             if (source.handedness === activeHandedness && source.gamepad && source.gamepad.hapticActuators && source.gamepad.hapticActuators.length > 0) {
                                 source.gamepad.hapticActuators[0].pulse(data.intensity, data.duration);
@@ -290,18 +363,30 @@
             }
         }
 
-
-        
-        btnExitVR.addEventListener('click', (e) => {
-            if (uiLocked && xrSession) {
-                console.log("[WebXR] Bỏ qua click Exit VR vì đang ở chế độ điều khiển (drive-mode).");
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-            }
+        async function disposeSession() {
+            console.log("[WebXR] Đang dọn dẹp và giải phóng WebXR session...");
             if (xrSession) {
-                xrSession.end();
+                try {
+                    await xrSession.end();
+                } catch (err) {
+                    console.warn("[WebXR] Ngoại lệ khi gọi xrSession.end():", err);
+                }
+                xrSession = null;
             }
+            glContext = null;
+            xrRefSpace = null;
+            btnEnterVR.style.display = 'flex';
+            btnExitVR.style.display = 'none';
+            vrOverlay.style.display = 'flex';
+            statusDiv.innerText = "VR Session Cleaned. Ready to Enter.";
+            updateRobotStatusBadge("Sẵn sàng", "green");
+        }
+
+        btnExitVR.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log("[WebXR] Người dùng nhấn Exit VR -> Dọn dẹp session sạch");
+            await disposeSession();
         });
 
         // Quản lý trạng thái: Khóa cố định Drive Mode để điều khiển Robot thông suốt
@@ -320,24 +405,34 @@
             }
         }
 
-        btnEnterVR.addEventListener('click', () => {
+        btnEnterVR.addEventListener('click', async () => {
             if (btnEnterVR.isVR) {
-                if (!xrSession) {
-                    // DOM Overlay BẮT BUỘC phải hiển thị (không được display: none) TRƯỚC KHI requestSession
-                    vrOverlay.style.display = 'flex';
-                    
-                    // Yêu cầu chế độ AR với dom-overlay
-                    navigator.xr.requestSession('immersive-ar', {
-                        optionalFeatures: ['local-floor', 'bounded-floor', 'dom-overlay'],
-                        domOverlay: { root: vrOverlay }
-                    }).then(onSessionStarted).catch((err) => {
-                        console.log("AR failed, fallback to VR", err);
-                        navigator.xr.requestSession('immersive-vr', {
-                            optionalFeatures: ['local-floor', 'bounded-floor', 'dom-overlay'],
-                            domOverlay: { root: vrOverlay }
-                        }).then(onSessionStarted);
-                    });
+                // Nếu có session cũ còn sót lại (zombie session), ép hủy sạch trước khi tạo mới
+                if (xrSession) {
+                    await disposeSession();
                 }
+
+                // DOM Overlay BẮT BUỘC phải hiển thị TRƯỚC KHI requestSession
+                vrOverlay.style.display = 'flex';
+                statusDiv.innerText = "Entering VR...";
+
+                const sessionInit = {
+                    optionalFeatures: ['local-floor', 'bounded-floor', 'dom-overlay'],
+                    domOverlay: { root: vrOverlay }
+                };
+
+                navigator.xr.requestSession('immersive-ar', sessionInit)
+                    .then(onSessionStarted)
+                    .catch((err) => {
+                        console.log("AR failed, fallback to VR", err);
+                        navigator.xr.requestSession('immersive-vr', sessionInit)
+                            .then(onSessionStarted)
+                            .catch((err2) => {
+                                console.error("[WebXR] Lỗi khởi tạo VR session:", err2);
+                                statusDiv.innerText = "Enter VR Failed";
+                                disposeSession();
+                            });
+                    });
             }
         });
 
@@ -351,6 +446,25 @@
 
             session.addEventListener('end', onSessionEnded);
 
+            // Xử lý khi kính tạm thời chuyển trạng thái hiển thị
+            session.addEventListener('visibilitychange', () => {
+                console.log(`[WebXR] Session visibilityState: ${session.visibilityState}`);
+                if (session.visibilityState === 'hidden') {
+                    // Cảm biến tiệm cận kính hoặc menu che tạm thời: giữ phiên VR, gửi heartbeat giữ an toàn robot
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        try {
+                            ws.send(JSON.stringify({
+                                t: Date.now() / 1000.0,
+                                tracking_lost: true,
+                                trigger: false,
+                                grip: false,
+                                drive_mode: true
+                            }));
+                        } catch (e) {}
+                    }
+                }
+            });
+
             // Thiết lập WebGL dummy để WebXR chịu chạy loop
             const canvas = document.getElementById('webgl-canvas');
             glContext = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
@@ -358,12 +472,27 @@
 
             session.requestReferenceSpace('local').then((refSpace) => {
                 xrRefSpace = refSpace;
+                // Báo cho Server biết có phiên WebXR mới bắt đầu để tự động re-sync mà không cần toggle Teleop
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(JSON.stringify({
+                            type: "session_start",
+                            t: Date.now() / 1000.0
+                        }));
+                    } catch (e) {}
+                }
                 session.requestAnimationFrame(onXRFrame);
+            }).catch((refErr) => {
+                console.error("[WebXR] Lỗi requestReferenceSpace:", refErr);
+                disposeSession();
             });
         }
 
         function onSessionEnded(event) {
+            console.log("[WebXR] Sự kiện onSessionEnded đã kích hoạt.");
             xrSession = null;
+            glContext = null;
+            xrRefSpace = null;
             btnEnterVR.style.display = 'flex';
             btnExitVR.style.display = 'none';
             vrOverlay.style.display = 'flex'; // Vẫn duy trì hiển thị Cockpit 2D
@@ -372,125 +501,143 @@
 
         function onXRFrame(time, frame) {
             let session = frame.session;
+            // Luôn gọi requestAnimationFrame đầu tiên để đảm bảo vòng lặp WebXR không bao giờ bị dừng
             session.requestAnimationFrame(onXRFrame);
             
-            // Xóa buffer WebGL để không cản trở lớp AR (Xuyên thấu)
-            if (glContext) {
-                glContext.bindFramebuffer(glContext.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
-                glContext.clearColor(0, 0, 0, 0); // Trong suốt hoàn toàn
-                glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
-            }
-
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-            let sentData = false;
-
-            let activeSource = null;
-            // Ưu tiên tay phải
-            for (let source of session.inputSources) {
-                if (source.targetRayMode === 'gaze') continue;
-                if (!source.gripSpace && !source.targetRaySpace) continue;
-                if (source.handedness === 'right') {
-                    activeSource = source;
-                    break;
-                }
-            }
-            // Nếu không có tay phải thì lấy tay trái
-            if (!activeSource) {
-                for (let source of session.inputSources) {
-                    if (source.targetRayMode === 'gaze') continue;
-                    if (!source.gripSpace && !source.targetRaySpace) continue;
-                    if (source.handedness === 'left') {
-                        activeSource = source;
-                        break;
+            try {
+                // Xóa buffer WebGL để không cản trở lớp AR (Xuyên thấu)
+                if (glContext) {
+                    try {
+                        glContext.bindFramebuffer(glContext.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+                        glContext.clearColor(0, 0, 0, 0); // Trong suốt hoàn toàn
+                        glContext.clear(glContext.COLOR_BUFFER_BIT | glContext.DEPTH_BUFFER_BIT);
+                    } catch (glErr) {
+                        // Bỏ qua lỗi WebGL glitch
                     }
                 }
-            }
 
-            if (activeSource) {
-                activeHandedness = activeSource.handedness;
-                let space = activeSource.gripSpace || activeSource.targetRaySpace;
-                let pose = frame.getPose(space, xrRefSpace);
-                
-                if (pose) {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+                let sentData = false;
+                let activeSource = null;
+
+                if (session && session.inputSources) {
+                    // Ưu tiên tay phải
+                    for (let source of session.inputSources) {
+                        if (!source) continue;
+                        if (source.targetRayMode === 'gaze') continue;
+                        if (!source.gripSpace && !source.targetRaySpace) continue;
+                        if (source.handedness === 'right') {
+                            activeSource = source;
+                            break;
+                        }
+                    }
+                    // Nếu không có tay phải thì lấy tay trái
+                    if (!activeSource) {
+                        for (let source of session.inputSources) {
+                            if (!source) continue;
+                            if (source.targetRayMode === 'gaze') continue;
+                            if (!source.gripSpace && !source.targetRaySpace) continue;
+                            if (source.handedness === 'left') {
+                                activeSource = source;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                let pose = null;
+                if (activeSource && xrRefSpace) {
+                    activeHandedness = activeSource.handedness;
+                    let space = activeSource.gripSpace || activeSource.targetRaySpace;
+                    if (space) {
+                        try {
+                            pose = frame.getPose(space, xrRefSpace);
+                        } catch (pErr) {
+                            pose = null;
+                        }
+                    }
+                }
+
+                if (activeSource && pose && pose.transform && pose.transform.position && pose.transform.orientation) {
                     let triggerPressed = false;
                     let gripPressed = false;
                     let thumbstickClickPressed = false;
+                    let recordRawPressed = false;
                     let gripperRawPressed = false;
                     let gripperBtnPressed = false;
                     let btnBPressed = false;
                     
                     if (activeSource.gamepad && activeSource.gamepad.buttons) {
+                        let btns = activeSource.gamepad.buttons;
+                        let h = activeSource.handedness;
                         // Button 0: Index Trigger (bóp trỏ - tịnh tiến, ngưỡng > 0.25)
-                        if (activeSource.gamepad.buttons.length > 0) {
-                            let b0 = activeSource.gamepad.buttons[0];
+                        if (btns.length > 0) {
+                            let b0 = btns[0];
                             let trigVal = (typeof b0.value === 'number') ? b0.value : (b0.pressed ? 1.0 : 0.0);
                             triggerPressed = trigVal > 0.25;
                         }
                         // Button 1: Hand Grip (bóp hông - xoay, ngưỡng > 0.25)
-                        if (activeSource.gamepad.buttons.length > 1) {
-                            let b1 = activeSource.gamepad.buttons[1];
+                        if (btns.length > 1) {
+                            let b1 = btns[1];
                             let gripVal = (typeof b1.value === 'number') ? b1.value : (b1.pressed ? 1.0 : 0.0);
                             gripPressed = gripVal > 0.25;
                         }
                         // Button 3: Thumbstick Click (nhấn cần gạt Analog) -> Lệnh Go Home
-                        if (activeSource.gamepad.buttons.length > 3) {
-                            let b3 = activeSource.gamepad.buttons[3];
+                        if (btns.length > 3) {
+                            let b3 = btns[3];
                             thumbstickClickPressed = Boolean(b3.pressed || (typeof b3.value === 'number' && b3.value > 0.5));
                         }
-                        // Button 4: Nút A (tay phải) hoặc Nút X (tay trái) - Kẹp/Nhả Gripper
-                        if (activeSource.gamepad.buttons.length > 4) {
-                            let b4 = activeSource.gamepad.buttons[4];
-                            gripperRawPressed = Boolean(b4.pressed || (typeof b4.value === 'number' && b4.value > 0.5));
+                        // Button 4: Nút A (tay phải) cho Record Toggle | Nút X (tay trái) cho Gripper
+                        if (btns.length > 4) {
+                            let b4 = btns[4];
+                            let b4_val = Boolean(b4.pressed || (typeof b4.value === 'number' && b4.value > 0.5));
+                            if (h === 'left') {
+                                gripperRawPressed = b4_val;
+                            } else {
+                                recordRawPressed = b4_val;
+                            }
                         }
                         // Button 5: Nút B (tay phải) hoặc Nút Y (tay trái) - Bật/Tắt Teleop (Grip + B để Hiệu chuẩn bàn máy)
-                        if (activeSource.gamepad.buttons.length > 5) {
-                            let b5 = activeSource.gamepad.buttons[5];
+                        if (btns.length > 5) {
+                            let b5 = btns[5];
                             btnBPressed = Boolean(b5.pressed || (typeof b5.value === 'number' && b5.value > 0.5));
                         }
                     }
 
                     // Kiểm tra cả tay cầm phụ nếu có (ví dụ tay trái nhấn L3, nút X, hoặc nút Y)
-                    for (let s of session.inputSources) {
-                        if (s !== activeSource && s.gamepad && s.gamepad.buttons) {
-                            if (s.gamepad.buttons.length > 3) {
-                                let b3_sub = s.gamepad.buttons[3];
-                                if (b3_sub.pressed || (typeof b3_sub.value === 'number' && b3_sub.value > 0.5)) {
-                                    thumbstickClickPressed = true;
+                    if (session.inputSources) {
+                        for (let s of session.inputSources) {
+                            if (s && s !== activeSource && s.gamepad && s.gamepad.buttons) {
+                                let btns_sub = s.gamepad.buttons;
+                                let h_sub = s.handedness;
+                                if (btns_sub.length > 3) {
+                                    let b3_sub = btns_sub[3];
+                                    if (b3_sub.pressed || (typeof b3_sub.value === 'number' && b3_sub.value > 0.5)) {
+                                        thumbstickClickPressed = true;
+                                    }
                                 }
-                            }
-                            if (s.gamepad.buttons.length > 4) {
-                                let b4_sub = s.gamepad.buttons[4];
-                                if (b4_sub.pressed || (typeof b4_sub.value === 'number' && b4_sub.value > 0.5)) {
-                                    gripperRawPressed = true;
+                                if (btns_sub.length > 4) {
+                                    let b4_sub = btns_sub[4];
+                                    if (b4_sub.pressed || (typeof b4_sub.value === 'number' && b4_sub.value > 0.5)) {
+                                        if (h_sub === 'left') {
+                                            gripperRawPressed = true;
+                                        } else {
+                                            recordRawPressed = true;
+                                        }
+                                    }
                                 }
-                            }
-                            if (s.gamepad.buttons.length > 5) {
-                                let b5_sub = s.gamepad.buttons[5];
-                                if (b5_sub.pressed || (typeof b5_sub.value === 'number' && b5_sub.value > 0.5)) {
-                                    btnBPressed = true;
+                                if (btns_sub.length > 5) {
+                                    let b5_sub = btns_sub[5];
+                                    if (b5_sub.pressed || (typeof b5_sub.value === 'number' && b5_sub.value > 0.5)) {
+                                        btnBPressed = true;
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // Xử lý cơ chế Toggle Gripper (Bấm 1 lần để kẹp/hút, bấm lần nữa để thả)
-                    let gripperToggleTriggered = false;
-                    if (gripperRawPressed && !lastGripperRawPressed) {
-                        gripperToggleTriggered = true;
-                        gripperClosedState = !gripperClosedState;
-                        console.log(`[Gripper Toggle] Chuyển trạng thái: ${gripperClosedState ? 'KẸP (CLOSED)' : 'THẢ (OPEN)'}`);
-                        try {
-                            if (activeSource.gamepad && activeSource.gamepad.hapticActuators && activeSource.gamepad.hapticActuators.length > 0) {
-                                let act = activeSource.gamepad.hapticActuators[0];
-                                if (typeof act.pulse === 'function') {
-                                    act.pulse(gripperClosedState ? 0.9 : 0.4, 120);
-                                }
-                            }
-                        } catch (hapticErr) {
-                            console.warn("[WebXR Haptic Warning]", hapticErr);
-                        }
-                    }
+                    lastRecordRawPressed = recordRawPressed;
                     lastGripperRawPressed = gripperRawPressed;
                     gripperBtnPressed = gripperClosedState;
 
@@ -499,8 +646,13 @@
 
                     let headQuat = null;
                     let headPos = null;
-                    let viewerPose = frame.getViewerPose(xrRefSpace);
-                    if (viewerPose) {
+                    let viewerPose = null;
+                    try {
+                        viewerPose = frame.getViewerPose(xrRefSpace);
+                    } catch (vErr) {
+                        viewerPose = null;
+                    }
+                    if (viewerPose && viewerPose.transform) {
                         let hp = viewerPose.transform.position;
                         let ho = viewerPose.transform.orientation;
                         headPos = [hp.x, hp.y, hp.z];
@@ -534,9 +686,12 @@
                         trigger: triggerPressed,
                         grip: gripPressed,
                         gripper_raw: gripperRawPressed,
-                        gripper_toggle_btn: gripperToggleTriggered,
+                        gripper_toggle_btn: false,
                         gripper_btn: gripperBtnPressed,
-                        button_a: gripperRawPressed,
+                        button_a: recordRawPressed,
+                        record_btn: recordRawPressed,
+                        record_toggle_btn: false,
+                        button_x: gripperRawPressed,
                         button_b: btnBPressed,
                         thumbstick: stickTilted,
                         thumbstick_click: thumbstickClickPressed,
@@ -570,20 +725,31 @@
                     
                     sentData = true;
                 }
-            }
 
-            // Ghi log để debug nếu không có tay cầm nào được nhận diện
-            if (!sentData && elValSource) {
-                elValSource.innerText = "Waiting...";
-                elValSource.style.color = "#64748b";
-                elValSource.style.fontWeight = "normal";
-                
-                let debugStr = "";
-                for(let s of session.inputSources) {
-                    debugStr += `[${s.handedness || 'none'}, ${s.targetRayMode}, pose:${frame.getPose(s.gripSpace||s.targetRaySpace, xrRefSpace) ? 'yes':'null'}] `;
+                // Khi mất tracking tạm thời hoặc pose == null (tay cầm khuất tầm nhìn kính):
+                // Giữ nguyên phiên WebXR, gửi heartbeat an toàn để robot đứng yên mà không ngắt session
+                if (!sentData) {
+                    try {
+                        ws.send(JSON.stringify({
+                            t: Date.now() / 1000.0,
+                            tracking_lost: true,
+                            trigger: false,
+                            grip: false,
+                            gripper_raw: false,
+                            button_b: false,
+                            drive_mode: true
+                        }));
+                    } catch (eSend) {}
+
+                    if (elValSource) {
+                        elValSource.innerText = "Tracking Lost (Holding)";
+                        elValSource.style.color = "#f59e0b";
+                        elValSource.style.fontWeight = "normal";
+                    }
+                    updateRobotStatusBadge("Sẵn sàng (Khuất tay cầm)", "orange");
                 }
-                // Optional: Console log the debug string since the UI doesn't have a giant box for it anymore
-                // console.log("Missing pose: ", debugStr);
+            } catch (errLoop) {
+                console.error("[WebXR] Ngoại lệ bảo vệ trong onXRFrame:", errLoop);
             }
         }
 
@@ -613,10 +779,223 @@
             pollImg.src = `wrist_camera.jpg?t=${Date.now()}`;
         }
 
-        setInterval(pollCameraFrame, 100);
+        // Chỉ kích hoạt polling khi mở file cục bộ qua file:/// (do không kết nối được stream /video_feed)
+        if (window.location.protocol === 'file:') {
+            setInterval(pollCameraFrame, 200);
+        }
+
+        // =========================================================================
+        // Interactive Joint-Space Control Handlers (Quest Cockpit)
+        // =========================================================================
+        function initCockpitJointControls() {
+            function updateFromPointer(e, i, trackEl) {
+                const rect = trackEl.getBoundingClientRect();
+                if (rect.width <= 0) return;
+                let pct = ((e.clientX - rect.left) / rect.width) * 100.0;
+                pct = Math.max(0, Math.min(100, pct));
+                let deg = percentToDeg(pct, i);
+                let rad = deg * (Math.PI / 180.0);
+                let clampedPct = degToPercent(deg);
+
+                if (elJointDeg[i]) elJointDeg[i].innerText = deg.toFixed(2);
+                if (elJointRad[i]) elJointRad[i].innerText = `(${rad.toFixed(2)} rad)`;
+                if (elJointPtr[i]) elJointPtr[i].style.left = `${clampedPct.toFixed(1)}%`;
+
+                activeCockpitJoint = i;
+                lastCockpitActionTime = Date.now();
+                sendJointCmd(i, deg);
+            }
+
+            function setupArrowButtons(i, leftArr, rightArr) {
+                function jogOnce(deltaDeg) {
+                    let curDeg = parseFloat(elJointDeg[i].innerText) || 0.0;
+                    let limits = JOINT_LIMITS_DEG[i] || [-180, 180];
+                    let newDeg = Math.max(limits[0], Math.min(limits[1], curDeg + deltaDeg));
+                    let rad = newDeg * (Math.PI / 180.0);
+                    let pct = degToPercent(newDeg);
+
+                    if (elJointDeg[i]) elJointDeg[i].innerText = newDeg.toFixed(2);
+                    if (elJointRad[i]) elJointRad[i].innerText = `(${rad.toFixed(2)} rad)`;
+                    if (elJointPtr[i]) elJointPtr[i].style.left = `${pct.toFixed(1)}%`;
+
+                    activeCockpitJoint = i;
+                    lastCockpitActionTime = Date.now();
+                    sendJointCmd(i, newDeg);
+                }
+
+                let holdTimeout = null;
+                let repeatInterval = null;
+
+                function startJog(deltaDeg, el) {
+                    jogOnce(deltaDeg);
+                    if (el) el.classList.add('active');
+                    holdTimeout = setTimeout(() => {
+                        repeatInterval = setInterval(() => {
+                            jogOnce(deltaDeg);
+                        }, 70);
+                    }, 220);
+                }
+
+                function stopJog(el) {
+                    if (holdTimeout) { clearTimeout(holdTimeout); holdTimeout = null; }
+                    if (repeatInterval) { clearInterval(repeatInterval); repeatInterval = null; }
+                    if (el) el.classList.remove('active');
+                    activeCockpitJoint = i;
+                    lastCockpitActionTime = Date.now();
+                }
+
+                if (leftArr) {
+                    leftArr.addEventListener('pointerdown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        startJog(-1.0, leftArr);
+                    });
+                    leftArr.addEventListener('pointerup', () => stopJog(leftArr));
+                    leftArr.addEventListener('pointerleave', () => stopJog(leftArr));
+                    leftArr.addEventListener('pointercancel', () => stopJog(leftArr));
+                }
+
+                if (rightArr) {
+                    rightArr.addEventListener('pointerdown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        startJog(1.0, rightArr);
+                    });
+                    rightArr.addEventListener('pointerup', () => stopJog(rightArr));
+                    rightArr.addEventListener('pointerleave', () => stopJog(rightArr));
+                    rightArr.addEventListener('pointercancel', () => stopJog(rightArr));
+                }
+            }
+
+            function setupDirectDegreeInput(i, valBox, spanDeg) {
+                if (!valBox || !spanDeg) return;
+                valBox.setAttribute('title', 'Bấm để nhập góc độ (° trực tiếp), Enter để xác nhận');
+
+                function enterEdit() {
+                    activeCockpitJoint = i;
+                    lastCockpitActionTime = Date.now() + 60000;
+                    spanDeg.contentEditable = 'true';
+                    spanDeg.focus();
+                    try {
+                        const range = document.createRange();
+                        range.selectNodeContents(spanDeg);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } catch (_) {}
+                }
+
+                function commitEdit() {
+                    spanDeg.contentEditable = 'false';
+                    let valStr = spanDeg.innerText.trim();
+                    let num = parseFloat(valStr);
+                    let limits = JOINT_LIMITS_DEG[i] || [-180, 180];
+                    if (!isNaN(num)) {
+                        let clamped = Math.max(limits[0], Math.min(limits[1], num));
+                        let rad = clamped * (Math.PI / 180.0);
+                        let pct = degToPercent(clamped);
+                        spanDeg.innerText = clamped.toFixed(2);
+                        if (elJointRad[i]) elJointRad[i].innerText = `(${rad.toFixed(2)} rad)`;
+                        if (elJointPtr[i]) elJointPtr[i].style.left = `${pct.toFixed(1)}%`;
+                        activeCockpitJoint = i;
+                        lastCockpitActionTime = Date.now();
+                        sendJointCmd(i, clamped);
+                    } else {
+                        activeCockpitJoint = -1;
+                        lastCockpitActionTime = 0;
+                    }
+                }
+
+                function cancelEdit() {
+                    spanDeg.contentEditable = 'false';
+                    activeCockpitJoint = -1;
+                    lastCockpitActionTime = 0;
+                }
+
+                valBox.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    enterEdit();
+                });
+
+                spanDeg.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitEdit();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cancelEdit();
+                    }
+                });
+
+                spanDeg.addEventListener('blur', () => {
+                    commitEdit();
+                });
+            }
+
+            for (let i = 0; i < jointIds.length; i++) {
+                const itemEl = elJointDeg[i] ? elJointDeg[i].closest('.ur-joint-item') : null;
+                if (!itemEl) continue;
+
+                const leftArr = itemEl.querySelector('.ur-arr-left');
+                const rightArr = itemEl.querySelector('.ur-arr-right');
+                const trackWrap = itemEl.querySelector('.ur-track-wrap');
+                const valBox = elJointDeg[i].closest('.ur-joint-val-box');
+
+                // 1. Slider dragging on ruler track
+                if (trackWrap) {
+                    trackWrap.addEventListener('pointerdown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        isDraggingTrack = true;
+                        dragJointIdx = i;
+                        trackWrap.classList.add('dragging');
+                        try {
+                            trackWrap.setPointerCapture(e.pointerId);
+                        } catch (_) {}
+                        updateFromPointer(e, i, trackWrap);
+                    });
+
+                    trackWrap.addEventListener('pointermove', (e) => {
+                        if (!isDraggingTrack || dragJointIdx !== i) return;
+                        updateFromPointer(e, i, trackWrap);
+                    });
+
+                    trackWrap.addEventListener('pointerup', (e) => {
+                        if (!isDraggingTrack || dragJointIdx !== i) return;
+                        try {
+                            trackWrap.releasePointerCapture(e.pointerId);
+                        } catch (_) {}
+                        trackWrap.classList.remove('dragging');
+                        isDraggingTrack = false;
+                        dragJointIdx = -1;
+                        activeCockpitJoint = i;
+                        lastCockpitActionTime = Date.now();
+                    });
+
+                    trackWrap.addEventListener('pointercancel', (e) => {
+                        if (!isDraggingTrack || dragJointIdx !== i) return;
+                        try {
+                            trackWrap.releasePointerCapture(e.pointerId);
+                        } catch (_) {}
+                        trackWrap.classList.remove('dragging');
+                        isDraggingTrack = false;
+                        dragJointIdx = -1;
+                        activeCockpitJoint = i;
+                        lastCockpitActionTime = Date.now();
+                    });
+                }
+
+                // 2. Green arrow buttons (click and hold repeat)
+                setupArrowButtons(i, leftArr, rightArr);
+
+                // 3. Direct degree input box
+                setupDirectDegreeInput(i, valBox, elJointDeg[i]);
+            }
+        }
 
         // Start
         connectWebSocket();
+        initCockpitJointControls();
 
         // Auto-assign the correct IP for Viser iframe based on current host
         const viserIframe = document.getElementById('viser-iframe');

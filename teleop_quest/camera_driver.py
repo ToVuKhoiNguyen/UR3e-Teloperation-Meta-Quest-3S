@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, Dict, Any
 import cv2
 import numpy as np
 
@@ -15,58 +15,13 @@ def draw_camera_osd(
     stream_mode: str = "rgb"
 ) -> np.ndarray:
     """
-    Vẽ lớp phủ hiển thị OSD hiện đại lên khung hình xem trước:
-    - Tự động nhận diện ảnh đơn (RGB / Depth) hoặc ảnh ghép đôi (Side-by-side).
-    - Hiển thị tên thiết bị, FPS, chế độ hiển thị, trạng thái ngàm kẹp và tâm ngắm crosshair.
+    Trả về khung hình video stream thuần túy sạch 100%:
+    - Không vẽ thanh bar đen hay nhãn trạng thái OSD.
+    - Không vẽ chữ đè (text) hay tâm ngắm (crosshair).
     """
     if frame is None:
         return frame
-    out = frame.copy()
-    h, w = out.shape[:2]
-
-    # Thanh header sẫm màu bán trong suốt Slate
-    cv2.rectangle(out, (0, 0), (w, 32), (15, 23, 42), -1)
-
-    is_sbs = (w >= 1.5 * h) or (stream_mode == "side_by_side" and w > 640)
-
-    if is_sbs:
-        mid_x = w // 2
-        # Vạch kẻ phân cách giữa RGB và Depth
-        cv2.line(out, (mid_x, 0), (mid_x, h), (0, 220, 255), 1, cv2.LINE_AA)
-
-        # Tiêu đề nửa trái (RGB)
-        left_text = f"RGB | {device_name.upper()} | {fps:.1f} FPS"
-        cv2.putText(out, left_text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # Tiêu đề nửa phải (Depth Aligned)
-        right_text = "DEPTH (ALIGNED) | TURBO COLORIZER"
-        cv2.putText(out, right_text, (mid_x + 10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (100, 220, 255), 1, cv2.LINE_AA)
-
-        # Trạng thái ngàm kẹp ở góc phải
-        status_text = "GRIPPER: CLOSED [100%]" if gripper_closed else "GRIPPER: OPEN [0%]"
-        status_color = (255, 80, 80) if gripper_closed else (80, 255, 120)
-        cv2.putText(out, status_text, (w - 230, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_color, 1, cv2.LINE_AA)
-
-        # Tâm ngắm crosshair ở tâm mỗi nửa ảnh
-        cx1, cy1 = mid_x // 2, h // 2
-        cx2, cy2 = mid_x + mid_x // 2, h // 2
-        for (cx, cy) in ((cx1, cy1), (cx2, cy2)):
-            cv2.drawMarker(out, (cx, cy), (0, 255, 255), cv2.MARKER_CROSS, 20, 1, cv2.LINE_AA)
-            cv2.circle(out, (cx, cy), 15, (0, 255, 255), 1, cv2.LINE_AA)
-    else:
-        mode_str = "DEPTH" if stream_mode == "depth" else "RGB"
-        title_text = f"{device_name.upper()} [{mode_str}] | {fps:.1f} FPS"
-        cv2.putText(out, title_text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
-
-        status_text = "GRIPPER: CLOSED [100%]" if gripper_closed else "GRIPPER: OPEN [0%]"
-        status_color = (255, 80, 80) if gripper_closed else (80, 255, 120)
-        cv2.putText(out, status_text, (w - 240, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 1, cv2.LINE_AA)
-
-        cx, cy = w // 2, h // 2
-        cv2.drawMarker(out, (cx, cy), (0, 255, 255), cv2.MARKER_CROSS, 24, 1, cv2.LINE_AA)
-        cv2.circle(out, (cx, cy), 18, (0, 255, 255), 1, cv2.LINE_AA)
-
-    return out
+    return frame.copy()
 
 
 class BaseWristCamera:
@@ -90,6 +45,17 @@ class BaseWristCamera:
     def is_real(self) -> bool:
         return False
 
+    def get_frame_metadata(self) -> Dict[str, Any]:
+        """Trả về metadata khung hình: timestamp phần cứng, timestamp toàn cục (ns), frame number."""
+        t_ns = time.perf_counter_ns()
+        return {
+            "timestamp_hw_ms": t_ns / 1e6,
+            "timestamp_global_ns": t_ns,
+            "frame_number": 0,
+            "domain": "system",
+            "latency_ms": 0.0,
+        }
+
     def release(self):
         pass
 
@@ -102,6 +68,7 @@ class SyntheticWristCameraWrapper(BaseWristCamera):
         self.height = height
         self._latest_depth_raw = None
         self._fps_actual = 20.0
+        self._frame_seq = 0
 
     def get_frame(
         self,
@@ -113,6 +80,7 @@ class SyntheticWristCameraWrapper(BaseWristCamera):
         stream_mode: str = "rgb",
         **kwargs
     ) -> np.ndarray:
+        self._frame_seq += 1
         if stream_mode == "depth":
             depth_rgb, depth_raw = self.cam.render_depth(
                 tool_pos=tool_pos,
@@ -122,6 +90,7 @@ class SyntheticWristCameraWrapper(BaseWristCamera):
                 gripper_closed=gripper_closed
             )
             self._latest_depth_raw = depth_raw
+            self._latest_ts_ns = time.perf_counter_ns()
             return depth_rgb
         elif stream_mode == "side_by_side":
             rgb = self.cam.render(
@@ -139,18 +108,31 @@ class SyntheticWristCameraWrapper(BaseWristCamera):
                 gripper_closed=gripper_closed
             )
             self._latest_depth_raw = depth_raw
+            self._latest_ts_ns = time.perf_counter_ns()
             return np.hstack([rgb, depth_rgb])
         else: # "rgb"
-            return self.cam.render(
+            frame = self.cam.render(
                 tool_pos=tool_pos,
                 tool_quat=tool_quat,
                 tomato_pos=tomato_pos,
                 basket_pos=basket_pos,
                 gripper_closed=gripper_closed
             )
+            self._latest_ts_ns = time.perf_counter_ns()
+            return frame
 
     def get_depth_frame(self) -> Optional[np.ndarray]:
         return self._latest_depth_raw.copy() if self._latest_depth_raw is not None else None
+
+    def get_frame_metadata(self) -> Dict[str, Any]:
+        t_ns = getattr(self, "_latest_ts_ns", time.perf_counter_ns())
+        return {
+            "timestamp_hw_ms": t_ns / 1e6,
+            "timestamp_global_ns": t_ns,
+            "frame_number": self._frame_seq,
+            "domain": "synthetic_sim",
+            "latency_ms": 0.0,
+        }
 
     def add_osd_preview(
         self,
@@ -202,6 +184,8 @@ class RealSenseWristCamera(BaseWristCamera):
         self._fps_actual = 0.0
         self._is_connected = False
         self._device_name = "RealSense Camera"
+        self._hw_time_offset_ns: Optional[int] = None
+        self._latest_metadata: Dict[str, Any] = {}
 
         self._thread = threading.Thread(target=self._capture_worker, daemon=True)
         self._thread.start()
@@ -276,12 +260,27 @@ class RealSenseWristCamera(BaseWristCamera):
 
             try:
                 frames = pipeline.wait_for_frames(timeout_ms=1000)
+                t_arrival_ns = time.perf_counter_ns()
                 # Căn chỉnh pixel-to-pixel giữa Depth và RGB
                 aligned_frames = align.process(frames)
                 color_frame = aligned_frames.get_color_frame()
                 depth_frame = aligned_frames.get_depth_frame()
                 if not color_frame or not depth_frame:
                     continue
+
+                # Đọc Hardware Timestamp & Domain từ ASIC RealSense
+                hw_ts_ms = float(color_frame.get_timestamp())
+                hw_domain = str(color_frame.get_frame_timestamp_domain())
+                frame_num = int(color_frame.get_frame_number())
+
+                # Tính toán Offset ở frame đầu tiên để bù trôi pha
+                hw_ts_ns = int(hw_ts_ms * 1_000_000)
+                if self._hw_time_offset_ns is None:
+                    self._hw_time_offset_ns = t_arrival_ns - hw_ts_ns
+                    print(f"[RealSense HW-Sync] Đã khóa pha Hardware Timestamp: Offset={self._hw_time_offset_ns} ns ({hw_domain})")
+
+                # Timestamp toàn cục tính theo Master Clock đã bù trôi
+                global_ts_ns = hw_ts_ns + self._hw_time_offset_ns
 
                 # pyrealsense2 rs.format.rgb8 trả về mảng shape (H, W, 3) hệ màu RGB
                 frame_rgb = np.asanyarray(color_frame.get_data())
@@ -306,6 +305,13 @@ class RealSenseWristCamera(BaseWristCamera):
                     self._latest_rgb = frame_rgb
                     self._latest_depth = frame_depth
                     self._latest_depth_raw = depth_raw
+                    self._latest_metadata = {
+                        "timestamp_hw_ms": hw_ts_ms,
+                        "timestamp_global_ns": global_ts_ns,
+                        "frame_number": frame_num,
+                        "domain": hw_domain,
+                        "latency_ms": (t_arrival_ns - global_ts_ns) / 1e6
+                    }
                     self._is_connected = True
 
             except Exception:
@@ -358,6 +364,10 @@ class RealSenseWristCamera(BaseWristCamera):
     def get_depth_frame(self) -> Optional[np.ndarray]:
         with self._lock:
             return self._latest_depth_raw.copy() if self._latest_depth_raw is not None else None
+
+    def get_frame_metadata(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._latest_metadata)
 
     def add_osd_preview(
         self,

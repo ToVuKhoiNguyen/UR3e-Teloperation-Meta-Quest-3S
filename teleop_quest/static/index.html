@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meta Quest VR Teleop</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=9">
+    <link rel="stylesheet" href="style.css?v=10">
 </head>
 
 <body>
@@ -45,21 +45,13 @@
     <!-- DOM OVERLAY HUD -->
     <div id="vr-overlay" style="display: flex;">
         <div id="cockpit-panel">
-            <!-- Header -->
-            <div class="cockpit-header">
-                <div class="header-left">
-                </div>
-                <div class="header-center">
-                    <span class="title">UR3e Teleoperation</span>
-                </div>
-                <div class="header-right">
-                    <button id="btn-enter-vr" class="btn-top-menu" style="background: #2563eb;">
-                        Enter VR
-                    </button>
-                    <button id="btn-exit-vr" class="btn-top-menu" style="display: none;">
-                        Exit VR
-                    </button>
-                </div>
+            <div class="header-right">
+                <button id="btn-enter-vr" class="btn-top-menu" style="background: #2563eb;">
+                    Enter VR
+                </button>
+                <button id="btn-exit-vr" class="btn-top-menu" style="display: none;">
+                    Exit VR
+                </button>
             </div>
 
             <!-- Body -->
@@ -74,25 +66,21 @@
                 <!-- Right: Camera & Stats (1/3) -->
                 <div class="sidebar-right">
 
-                    <!-- Khung xem trước Camera Cổ tay tương tự sidebar Viser -->
-                    <div class="status-card" id="card-wrist-cam" style="padding: 16px;">
+                    <!-- Khung xem trước Camera Cổ tay -->
+                    <div class="status-card" id="card-wrist-cam" style="padding: 0; overflow: hidden; border: none; border-radius: 6px;">
                         <div id="cam-stream">
-                            <img id="wrist-cam-img" src="video_feed" alt="Góc nhìn Cổ tay Robot"
+                            <img id="wrist-cam-img" src="video_feed" alt=""
                                 onload="this.style.display='block'; document.getElementById('cam-placeholder').style.display='none';"
                                 onerror="this.onerror=null; this.src='wrist_camera.jpg';" />
                             <span id="cam-placeholder" style="display: none;">[ Đang chờ luồng video... ]</span>
                         </div>
-                        <div
-                            style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #64748b; font-weight: 500;">
-                            <span>Góc nhìn Cổ tay Robot</span>
-                            <span style="font-size: 11px; color: #94a3b8;">Eye-in-Hand (640x480)</span>
-                        </div>
                     </div>
 
                     <!-- Robot Parameters (PolyScope Style) -->
+                    <!-- Robot Parameters (PolyScope Style) -->
                     <div class="ur-params-card">
                         <!-- Section 1: Tool Position -->
-                        <div class="ur-sec">
+                        <div class="ur-sec ur-sec-tool">
                             <div class="ur-sec-hdr">Tool Position</div>
                             <div class="ur-tcp-body">
                                 <table class="ur-tcp-table">
@@ -100,7 +88,7 @@
                                         <td class="ur-tcp-lbl">X</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-x">0.00</span></div></td>
                                         <td class="ur-tcp-unit">mm</td>
-                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RX</td>
+                                        <td class="ur-tcp-lbl ur-tcp-lbl-r">RX</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-rx">0.000</span></div></td>
                                         <td class="ur-tcp-unit">rad</td>
                                     </tr>
@@ -108,7 +96,7 @@
                                         <td class="ur-tcp-lbl">Y</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-y">0.00</span></div></td>
                                         <td class="ur-tcp-unit">mm</td>
-                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RY</td>
+                                        <td class="ur-tcp-lbl ur-tcp-lbl-r">RY</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-ry">0.000</span></div></td>
                                         <td class="ur-tcp-unit">rad</td>
                                     </tr>
@@ -116,7 +104,7 @@
                                         <td class="ur-tcp-lbl">Z</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-z">0.00</span></div></td>
                                         <td class="ur-tcp-unit">mm</td>
-                                        <td class="ur-tcp-lbl" style="padding-left: 8px;">RZ</td>
+                                        <td class="ur-tcp-lbl ur-tcp-lbl-r">RZ</td>
                                         <td><div class="ur-tcp-val-box"><span id="val-tcp-rz">0.000</span></div></td>
                                         <td class="ur-tcp-unit">rad</td>
                                     </tr>
@@ -125,126 +113,174 @@
                         </div>
 
                         <!-- Section 2: Joint Position -->
-                        <div class="ur-sec" style="margin-top: 14px;">
+                        <div class="ur-sec ur-sec-joints">
                             <div class="ur-sec-hdr">Joint Position</div>
                             <div class="ur-joints-body">
                                 <!-- Base (q1) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Base</span>
-                                            <span id="val-base-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Base</span>
+                                                    <span id="val-base-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-base-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-base" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-base-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-base" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
 
                                 <!-- Shoulder (q2) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Shoulder</span>
-                                            <span id="val-shoulder-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Shoulder</span>
+                                                    <span id="val-shoulder-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-shoulder-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-shoulder" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-shoulder-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-shoulder" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
 
                                 <!-- Elbow (q3) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Elbow</span>
-                                            <span id="val-elbow-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Elbow</span>
+                                                    <span id="val-elbow-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-elbow-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-elbow" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-elbow-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-elbow" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
 
                                 <!-- Wrist 1 (q4) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Wrist 1</span>
-                                            <span id="val-wrist1-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Wrist 1</span>
+                                                    <span id="val-wrist1-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-wrist1-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-wrist1" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-wrist1-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-wrist1" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
 
                                 <!-- Wrist 2 (q5) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Wrist 2</span>
-                                            <span id="val-wrist2-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Wrist 2</span>
+                                                    <span id="val-wrist2-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-wrist2-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-wrist2" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-wrist2-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-wrist2" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
 
                                 <!-- Wrist 3 (q6) -->
                                 <div class="ur-joint-item">
                                     <div class="ur-joint-row">
-                                        <span class="ur-joint-arr">&#9664;</span>
-                                        <div class="ur-joint-label-group">
-                                            <span class="ur-joint-name">Wrist 3</span>
-                                            <span id="val-wrist3-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                        <svg class="ur-joint-arr-svg ur-arr-left" viewBox="0 0 24 24"><path d="M11 5 L3 12 L11 19 L11 15 L21 15 L21 9 L11 9 Z"/></svg>
+                                        <div class="ur-joint-center-wrap">
+                                            <div class="ur-joint-info-row">
+                                                <div class="ur-joint-label-group">
+                                                    <span class="ur-joint-name">Wrist 3</span>
+                                                    <span id="val-wrist3-rad" class="ur-joint-rad">(0.00 rad)</span>
+                                                </div>
+                                                <div class="ur-joint-val-wrap">
+                                                    <div class="ur-joint-val-box"><span id="val-wrist3-deg">0.00</span></div>
+                                                    <span class="ur-joint-deg-unit">&deg;</span>
+                                                </div>
+                                            </div>
+                                            <div class="ur-track-wrap">
+                                                <div class="ur-track-tick-e0"></div>
+                                                <div class="ur-track-tick-q1"></div>
+                                                <div class="ur-track-tick-mid"></div>
+                                                <div class="ur-track-tick-q3"></div>
+                                                <div class="ur-track-tick-e1"></div>
+                                                <div id="ptr-wrist3" class="ur-track-pointer" style="left: 50%;"></div>
+                                            </div>
                                         </div>
-                                        <div class="ur-joint-val-box"><span id="val-wrist3-deg">0.00</span></div>
-                                        <span class="ur-joint-deg-unit">&deg;</span>
-                                        <span class="ur-joint-arr">&#9654;</span>
-                                    </div>
-                                    <div class="ur-track-wrap">
-                                        <div class="ur-track-tick-q1"></div>
-                                        <div class="ur-track-tick-mid"></div>
-                                        <div class="ur-track-tick-q3"></div>
-                                        <div id="ptr-wrist3" class="ur-track-pointer" style="left: 50%;"></div>
+                                        <svg class="ur-joint-arr-svg ur-arr-right" viewBox="0 0 24 24"><path d="M13 5 L21 12 L13 19 L13 15 L3 15 L3 9 L13 9 Z"/></svg>
                                     </div>
                                 </div>
                             </div>

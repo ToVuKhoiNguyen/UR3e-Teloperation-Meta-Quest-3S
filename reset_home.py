@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script reset robot UR3e / URSim ve vi tri Safe Home chuan:
-  SAFE_HOME_JOINTS = [0.0, -2.2, 1.9, -1.383, -1.57, 0.0]
+  SAFE_HOME_JOINTS = [0.0, -2.2, 1.9, -1.2708, -1.5708, 0.0]
 
 Chuc nang:
   1. Tu dong ket noi Dashboard Port 29999 de mo khoa Protective Stop / Safety Popup
@@ -18,7 +18,7 @@ import socket
 import argparse
 import math
 
-SAFE_HOME_JOINTS = [0.0, -2.2, 1.9, -1.383, -1.57, 0.0]
+SAFE_HOME_JOINTS = [0.0, -2.2, 1.9, -1.2708, -1.5708, 0.0]
 DASHBOARD_PORT = 29999
 SECONDARY_PORT = 30002
 

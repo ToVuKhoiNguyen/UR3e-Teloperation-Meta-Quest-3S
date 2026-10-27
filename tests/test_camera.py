@@ -64,7 +64,7 @@ def test_camera_render():
     print("Đã render thành công cả 4 trường hợp! Bạn có thể xem các file ảnh trong thư mục 'logs/'.")
     print("=" * 60)
 
-def test_interactive_gui():
+def run_interactive_gui():
     """Khởi động một mini server Viser trên cổng 8089 để kéo slider thử nghiệm trực tiếp."""
     import viser
     import subprocess
@@ -139,7 +139,7 @@ def main():
     args = parser.parse_args()
 
     if args.gui:
-        test_interactive_gui()
+        run_interactive_gui()
     else:
         test_camera_render()
 

@@ -64,9 +64,9 @@ def run_comprehensive_tests():
 
     # ─────────────────────────────────────────────────────────────────────────
     # 2. TEST TƯ THẾ VƯƠN XA MÉP BÀN (q2 = +0.18 rad)
-    # (Trước đây bị cự tuyệt vì dải cũ q2 in [0.35, 2.35])
+    # (Khớp cùi chỏ duỗi mở rộng, cổ tay hướng góc gắp tự nhiên q3 = -1.35 rad)
     # ─────────────────────────────────────────────────────────────────────────
-    q_far_reach = [0.20, -1.20, +0.18, -0.55, -1.57, 0.0]
+    q_far_reach = [0.20, -1.20, +0.18, -1.35, -1.50, 0.0]
     val_far = validate_joints(q_far_reach)
     gate_far = gate.check(q_far_reach)
     print(f"\n[Test 2 - VƯƠN XA MÉP BÀN (q2 = +0.18 rad ~ 10.3°)]")
@@ -89,46 +89,52 @@ def run_comprehensive_tests():
     print("  -> PASS: Tọa độ gần đế (r = 0.148m) được bảo toàn nguyên vẹn, không bị kéo văng ra xa!")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 4. TEST RÀO CHẮN AN TOÀN CHỐNG TỰ VA CHẠM
+    # 4. TEST RÀO CHẮN AN TOÀN CHỐNG TỰ VA CHẠM (CAMERA & ARM JOINTS)
     # ─────────────────────────────────────────────────────────────────────────
     print(f"\n[Test 4 - RÀO CHẮN CHỐNG TỰ VA CHẠM]")
 
-    # 4a. Cùi chỏ gập quá sát (q2 = 2.50 rad > 2.40 rad)
-    q_elbow_tight = [0.0, -2.20, +2.50, -1.57, -1.57, 0.0]
+    # 4a. Cùi chỏ gập quá sát (q2 = 2.60 rad > 2.55 rad)
+    q_elbow_tight = [0.0, -2.20, +2.60, -1.57, -1.50, 0.0]
     assert validate_joints(q_elbow_tight) is False
     assert gate.check(q_elbow_tight)["pass"] is False
-    print("  4a. Cùi chỏ gập quá sát (q2 = 2.50 > 2.40) -> REJECTED (Chặn đúng)")
+    print("  4a. Cùi chỏ gập quá sát (q2 = 2.60 > 2.55) -> REJECTED (Chặn đúng)")
 
-    # 4b. Cùi chỏ gập ngược xuống bàn (q2 = -0.10 rad < 0.10 rad)
-    q_elbow_rev = [0.0, -2.20, -0.10, -1.57, -1.57, 0.0]
+    # 4b. Cùi chỏ gập ngược xuống bàn (q2 = 0.00 rad < 0.05 rad)
+    q_elbow_rev = [0.0, -2.20, 0.00, -1.57, -1.50, 0.0]
     assert validate_joints(q_elbow_rev) is False
     assert gate.check(q_elbow_rev)["pass"] is False
-    print("  4b. Cùi chỏ gập ngược (q2 = -0.10 < 0.10) -> REJECTED (Chặn đúng)")
+    print("  4b. Cùi chỏ gập ngược (q2 = 0.00 < 0.05) -> REJECTED (Chặn đúng)")
 
-    # 4c. Cổ tay bẻ quặp ngược vào forearm (q3 = +0.25 rad > +0.10 rad)
-    q_wrist_danger = [0.0, -2.20, +1.90, +0.25, -1.57, 0.0]
-    assert validate_joints(q_wrist_danger) is False
-    assert gate.check(q_wrist_danger)["pass"] is False
-    print("  4c. Cổ tay bẻ ngược vào bắp tay (q3 = +0.25 > 0.10) -> REJECTED (Chặn đúng)")
+    # 4c. Khớp vai chúi quá sâu đâm bàn (q1 = -2.80 rad < -2.65 rad)
+    q_shoulder_deep = [0.0, -2.80, +1.90, -1.57, -1.50, 0.0]
+    assert validate_joints(q_shoulder_deep) is False
+    assert gate.check(q_shoulder_deep)["pass"] is False
+    print("  4c. Khớp vai chúi quá sâu đâm bàn (q1 = -2.80 < -2.65) -> REJECTED (Chặn đúng)")
 
-    # 4d. Cổ tay cuộn quá sâu (q3 = -3.40 rad < -3.20 rad)
-    q_wrist_deep = [0.0, -2.20, +1.90, -3.40, -1.57, 0.0]
+    # 4d. Cổ tay 1 vượt quá biên cơ học ±180° (q3 = 3.30 rad > 3.14 rad)
+    q_wrist_deep = [0.0, -2.20, +1.90, +3.30, -1.50, 0.0]
     assert validate_joints(q_wrist_deep) is False
     assert gate.check(q_wrist_deep)["pass"] is False
-    print("  4d. Cổ tay cuộn quá sâu (q3 = -3.40 < -3.20) -> REJECTED (Chặn đúng)")
+    print("  4d. Cổ tay 1 vượt biên cơ học (q3 = +3.30 > +3.14) -> REJECTED (Chặn đúng)")
+
+    # 4e. Cổ tay 2 vượt quá biên cơ học ±180° (q4 = -3.30 rad < -3.14 rad)
+    q_wrist2_side = [0.0, -2.20, +1.90, -1.57, -3.30, 0.0]
+    assert validate_joints(q_wrist2_side) is False
+    assert gate.check(q_wrist2_side)["pass"] is False
+    print("  4e. Cổ tay 2 vượt biên cơ học (q4 = -3.30 < -3.14) -> REJECTED (Chặn đúng)")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 5. TEST CLAMPING RÀO CHẮN THÂN ĐẾ VÀ SÀN
+    # 5. TEST CLAMPING RÀO CHẮN MẶT BÀN VÀ GIẢI PHÓNG THÂN ĐẾ (R_MIN = 0.0)
     # ─────────────────────────────────────────────────────────────────────────
-    print(f"\n[Test 5 - CLAMPING RÀO CHẮN THÂN ĐẾ & SÀN BÀN]")
-    pose_too_close = {"pos": [0.05, 0.05, 0.02], "quat": [1.0, 0.0, 0.0, 0.0]}
-    clamped_res = clamp_cartesian_safety(pose_too_close)
+    print(f"\n[Test 5 - RÀO CHẮN MẶT BÀN & GIẢI PHÓNG TOÀN BỘ KHÔNG GIAN GẦN ĐẾ]")
+    pose_close_to_base = {"pos": [0.03, 0.03, 0.005], "quat": [1.0, 0.0, 0.0, 0.0]}
+    clamped_res = clamp_cartesian_safety(pose_close_to_base)
     r_res = math.hypot(clamped_res["pos"][0], clamped_res["pos"][1])
     z_res = clamped_res["pos"][2]
-    print(f"  Vị trí quá gần đế (r = 0.07m, z = 0.02m) -> Clamped: r = {r_res:.4f}m (>= 0.14m), z = {z_res:.4f}m (>= 0.035m)")
-    assert r_res >= 0.1399, "LỖI: r_min clamp không hoạt động!"
-    assert z_res >= 0.0349, "LỖI: z_min clamp không hoạt động!"
-    print("  -> PASS: Rào chắn hình trụ bảo vệ thân đế và mặt bàn hoạt động chính xác!")
+    print(f"  Vị trí sát gốc đế r = {r_res:.4f}m (tiếp cận tự do, r_min=0.0), z = {z_res:.4f}m (clamped >= 0.020m chống đâm bàn)")
+    assert abs(r_res - math.hypot(0.03, 0.03)) < 1e-4, "LỖI: Bán kính sát đế không được bị đẩy ra ngoài!"
+    assert z_res >= 0.0199, "LỖI: z_min clamp không hoạt động!"
+    print("  -> PASS: Đã giải phóng hoàn toàn cột trụ ảo thân đế, rào chắn mặt bàn bảo toàn 1.0cm!")
 
     # ─────────────────────────────────────────────────────────────────────────
     # 6. ĐỘ TRỄ THẨM ĐỊNH AN TOÀN

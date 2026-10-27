@@ -41,6 +41,7 @@ class QuestServer:
         self._connected = False
         self._clients = set()
         self._loop = None
+        self._new_session_requested = False
         self._estop_triggered = False
         self._home_requested = False
         self._gripper_toggle_requested = False
@@ -92,6 +93,12 @@ class QuestServer:
                     safe_frame["button_y"] = False
                     safe_frame["gripper_raw"] = False
                     safe_frame["gripper_toggle_btn"] = False
+                    safe_frame["tracking_lost"] = True
+                    return safe_frame
+                if self._latest_frame.get("tracking_lost"):
+                    safe_frame = dict(self._latest_frame)
+                    safe_frame["trigger"] = False
+                    safe_frame["grip"] = False
                     return safe_frame
             return self._latest_frame
 
@@ -154,6 +161,14 @@ class QuestServer:
         with self._lock:
             if getattr(self, "_record_toggle_requested", False):
                 self._record_toggle_requested = False
+                return True
+            return False
+
+    def check_and_clear_new_session(self) -> bool:
+        """Kiểm tra và xóa cờ phiên WebXR mới / kết nối lại để hệ thống tự động re-sync trạng thái."""
+        with self._lock:
+            if getattr(self, "_new_session_requested", False):
+                self._new_session_requested = False
                 return True
             return False
 
@@ -596,6 +611,7 @@ class QuestServer:
             with self._lock:
                 self._connected = True
                 self._clients.add(websocket)
+                self._new_session_requested = True
                 current_mode = self._drive_mode
             try:
                 # Gửi trạng thái Teleop hiện tại ngay khi client vừa kết nối
@@ -604,7 +620,11 @@ class QuestServer:
                     try:
                         data = json.loads(message)
                         with self._lock:
-                            if data.get("type") == "estop":
+                            if data.get("type") == "session_start":
+                                self._new_session_requested = True
+                                self._last_seen = time.time()
+                                self._connected = True
+                            elif data.get("type") == "estop":
                                 self._estop_triggered = True
                             elif data.get("type") == "ui_state":
                                 self._drive_mode = True
@@ -628,6 +648,16 @@ class QuestServer:
                                         self.handle_cockpit_joint_jog(j_idx, float(data["delta_rad"]))
                                     elif "delta_deg" in data:
                                         self.handle_cockpit_joint_jog(j_idx, math.radians(float(data["delta_deg"])))
+                            elif data.get("tracking_lost"):
+                                self._latest_frame = dict(data)
+                                self._latest_frame["trigger"] = False
+                                self._latest_frame["grip"] = False
+                                self._last_seen = time.time()
+                                self._connected = True
+                                if self._latest_telemetry_dict is not None and "controller" in self._latest_telemetry_dict:
+                                    self._latest_telemetry_dict["controller"]["trigger"] = False
+                                    self._latest_telemetry_dict["controller"]["grip"] = False
+                                    self._latest_telemetry_bytes = json.dumps(self._latest_telemetry_dict).encode("utf-8")
                             else:
                                 self._latest_frame = data
                                 self._last_seen = time.time()

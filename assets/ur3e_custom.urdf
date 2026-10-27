@@ -90,9 +90,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/shoulder.stl"/>
+        <cylinder length="0.070" radius="0.050"/>
       </geometry>
     </collision>
     <inertial>
@@ -109,9 +109,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0.12"/>
+      <origin rpy="0 1.57079632679 0" xyz="-0.121775 0 0.12"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/upperarm.stl"/>
+        <cylinder length="0.23355" radius="0.035"/>
       </geometry>
     </collision>
     <inertial>
@@ -128,9 +128,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0.027"/>
+      <origin rpy="0 1.57079632679 0" xyz="-0.1066 0 0.027"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/forearm.stl"/>
+        <cylinder length="0.170" radius="0.030"/>
       </geometry>
     </collision>
     <inertial>
@@ -147,9 +147,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.104"/>
+      <origin rpy="1.57079632679 0 0" xyz="0 -0.040 0"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/wrist1.stl"/>
+        <cylinder length="0.070" radius="0.030"/>
       </geometry>
     </collision>
     <inertial>
@@ -166,9 +166,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 -0.08535"/>
+      <origin rpy="1.57079632679 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/wrist2.stl"/>
+        <cylinder length="0.070" radius="0.030"/>
       </geometry>
     </collision>
     <inertial>
@@ -185,9 +185,9 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0921"/>
+      <origin rpy="0 0 0" xyz="0 0 -0.020"/>
       <geometry>
-        <mesh filename="package://ur_description/meshes/ur3e/collision/wrist3.stl"/>
+        <cylinder length="0.030" radius="0.0365"/>
       </geometry>
     </collision>
     <inertial>
@@ -306,9 +306,38 @@
       </material>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <!-- Main mounting bracket box covering flange base and forward plate -->
+      <origin rpy="0 0 0" xyz="0 0.0324 0.003"/>
       <geometry>
-        <mesh filename="package://ur_description/robot_camera_mount_1.stl"/>
+        <box size="0.116 0.128 0.016"/>
+      </geometry>
+    </collision>
+    <collision>
+      <!-- Left ear corner sphere -->
+      <origin rpy="0 0 0" xyz="-0.058 0.058 0.003"/>
+      <geometry>
+        <sphere radius="0.010"/>
+      </geometry>
+    </collision>
+    <collision>
+      <!-- Right ear corner sphere -->
+      <origin rpy="0 0 0" xyz="0.058 0.058 0.003"/>
+      <geometry>
+        <sphere radius="0.010"/>
+      </geometry>
+    </collision>
+    <collision>
+      <!-- Front left tip sphere -->
+      <origin rpy="0 0 0" xyz="-0.027 0.096 0.003"/>
+      <geometry>
+        <sphere radius="0.010"/>
+      </geometry>
+    </collision>
+    <collision>
+      <!-- Front right tip sphere -->
+      <origin rpy="0 0 0" xyz="0.027 0.096 0.003"/>
+      <geometry>
+        <sphere radius="0.010"/>
       </geometry>
     </collision>
     <inertial>
@@ -320,7 +349,7 @@
   <joint name="tool0-camera_mount" type="fixed">
     <parent link="tool0"/>
     <child link="camera_mount_link"/>
-    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <origin rpy="0 0 -1.5707963267948966" xyz="0 0 0"/>
   </joint>
 
   <!-- Intel RealSense D455 Camera Link and Joint -->
@@ -335,9 +364,9 @@
       </material>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 1.5707963267948966 0" xyz="0 0 0.013"/>
       <geometry>
-        <mesh filename="package://ur_description/d455.stl"/>
+        <cylinder length="0.138" radius="0.028"/>
       </geometry>
     </collision>
     <inertial>
@@ -358,6 +387,36 @@
     <parent link="d455_link"/>
     <child link="camera_color_optical_frame"/>
     <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0.0325 0 0.026"/>
+  </joint>
+
+  <!-- Dummy Collision Link 1: Wrist 1 Motor (Bọc củ motor nắp trắng cổ tay 1 - nằm gọn trong vỏ 1cm) -->
+  <link name="wrist_1_motor_link">
+    <collision>
+      <origin rpy="1.57079632679 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.065" radius="0.033"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="forearm-wrist_1_motor" type="fixed">
+    <parent link="forearm_link"/>
+    <child link="wrist_1_motor_link"/>
+    <origin rpy="0 0 0" xyz="-0.2132 0 0.13105"/>
+  </joint>
+
+  <!-- Dummy Collision Link 2: Wrist 2 Motor (Bọc củ motor nắp trắng cổ tay 2 - nằm gọn trong vỏ 1cm) -->
+  <link name="wrist_2_motor_link">
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="0.031"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wrist_1-wrist_2_motor" type="fixed">
+    <parent link="wrist_1_link"/>
+    <child link="wrist_2_motor_link"/>
+    <origin rpy="1.570796327 0 0" xyz="0 -0.08535 0"/>
   </joint>
 </robot>
 

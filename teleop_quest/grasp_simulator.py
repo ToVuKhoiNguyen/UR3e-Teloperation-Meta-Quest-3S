@@ -8,7 +8,7 @@ class GraspSimulator:
       - Cơ chế Kinematic/Magnetic Grasping: hút dính quả cà chua khi đầu gắp chạm gần và bóp cò Grip.
       - Thả quả cà chua vào khay chứa khi nhả Grip.
     """
-    def __init__(self, server, pick_pos=(0.20, 0.20, 0.035), place_pos=(0.15, -0.20, 0.02)):
+    def __init__(self, server, pick_pos=(0.20, 0.20, 0.042), place_pos=(0.15, -0.20, 0.025)):
         self.server = server
         self.pick_init_pos = np.array(pick_pos, dtype=np.float32)
         self.place_basket_pos = np.array(place_pos, dtype=np.float32)
@@ -42,16 +42,16 @@ class GraspSimulator:
             position=tuple(self.place_basket_pos)
         )
 
-        # 3. Sinh mặt bàn làm việc 3D (Gỗ xám nhạt) nằm trong tầm với của tay máy
+        # 3. Sinh mặt bàn làm việc 3D (Gỗ xám nhạt) nằm trong tầm với của tay máy (Mặt bàn Z = +0.01m)
         self.table_mesh = self.server.scene.add_box(
             "/world/table",
             dimensions=(0.75, 0.80, 0.04),
             color=(185, 175, 160),
-            position=(0.20, 0.0, -0.02)
+            position=(0.20, 0.0, -0.01)
         )
         self.wall_mesh = None
 
-    def set_position(self, x: float, y: float, z: float = 0.035):
+    def set_position(self, x: float, y: float, z: float = 0.042):
         """Đặt vị trí quả cà chua tại tọa độ bất kỳ để thử nghiệm"""
         self.tomato_pos = np.array([x, y, z], dtype=np.float32)
         self.pick_init_pos = self.tomato_pos.copy()
@@ -69,8 +69,8 @@ class GraspSimulator:
             # Chưa gắp: Kiểm tra khoảng cách tới quả cà chua
             dist = np.linalg.norm(tool_p - self.tomato_pos)
             dist_xy = np.linalg.norm(tool_p[:2] - self.tomato_pos[:2])
-            # Cho phép gắp khi khoảng cách 3D < 9cm HOẶC căn chuẩn tâm XY < 5.5cm và đã hạ thấp Z < 13cm
-            can_grasp = (dist < self.grasp_distance_threshold) or (dist_xy < 0.055 and tool_p[2] < 0.13)
+            # Cho phép gắp khi khoảng cách 3D < 9.5cm HOẶC căn chuẩn tâm XY < 5.5cm và đã hạ thấp Z < 18cm
+            can_grasp = (dist < self.grasp_distance_threshold) or (dist_xy < 0.055 and tool_p[2] < 0.18)
             if can_grasp and grip_pressed:
                 self.is_grasped = True
                 event = "GRASP_SUCCESS"

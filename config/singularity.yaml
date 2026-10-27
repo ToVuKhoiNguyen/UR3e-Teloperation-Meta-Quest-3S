@@ -6,7 +6,7 @@ robot:
   name: ur3e
   rtde_ip: 127.0.0.1
 safe_return:
-  recovery_speed: 0.2
+  recovery_speed: 0.8
   safe_pose:
   - 0.0
   - -1.5708

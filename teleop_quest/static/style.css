@@ -65,16 +65,17 @@ button {
 
 /* URSim Main Window */
 #cockpit-panel {
-    width: 96vw;
-    height: 96vh;
+    width: 100vw;
+    height: 100vh;
     background: #f4f6f9;
-    border-radius: 12px;
-    border: 1px solid #dfe3e8;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
     display: flex;
     flex-direction: column;
     pointer-events: auto; /* Mặc định mở tương tác cho Edit Mode */
     overflow: hidden;
+    position: relative;
     transition: opacity 0.2s ease;
 }
 
@@ -95,16 +96,16 @@ button {
     pointer-events: auto !important;
 }
 
-/* Header */
-.cockpit-header {
-    height: 64px;
-    background-color: #ffffff;
-    color: #1e293b;
+/* Header Controls */
+.header-right {
+    position: absolute;
+    top: 12px;
+    right: 20px;
+    z-index: 1000;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 20px;
-    border-bottom: 1px solid #dfe3e8;
+    gap: 8px;
+    pointer-events: auto;
 }
 
 .header-left {
@@ -178,6 +179,8 @@ button {
     display: flex;
     flex: 1;
     background-color: #fff;
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* Left Column (2/3 width) */
@@ -188,6 +191,8 @@ button {
     display: flex;
     flex-direction: column;
     border-right: 1px solid #dfe3e8;
+    min-height: 0;
+    height: 100%;
 }
 
 /* Right Column (1/3 width) */
@@ -196,17 +201,29 @@ button {
     background-color: #f4f6f9;
     display: flex;
     flex-direction: column;
-    padding: 20px;
-    gap: 20px;
+    padding: 16px;
+    gap: 14px;
     overflow-y: auto;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
 }
 
 .status-card {
     background: #ffffff;
     border: 1px solid #dfe3e8;
-    border-radius: 8px;
-    padding: 20px;
+    border-radius: 6px;
+    padding: 14px 16px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+#card-wrist-cam {
+    flex-shrink: 0;
+    padding: 0 !important;
+    overflow: hidden;
+    background: #0f172a;
+    border: 1px solid #dfe3e8;
+    border-radius: 6px;
 }
 
 .card-title {
@@ -276,8 +293,8 @@ button {
     aspect-ratio: 4 / 3;
     flex: none;
     background: #0f172a;
-    border: 1px solid #dfe3e8;
-    border-radius: 6px;
+    border: none;
+    border-radius: 0;
     box-shadow: none;
     display: flex;
     align-items: center;
@@ -306,6 +323,17 @@ button {
     display: flex;
     overflow: hidden;
     pointer-events: auto; /* Phục hồi tương tác cho Viser 3D */
+    min-height: 0;
+    height: 100%;
+    position: relative;
+}
+
+#viser-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    pointer-events: auto;
 }
 
 /* Footer */
@@ -550,149 +578,250 @@ button {
 }
 
 /* ==========================================================================
-   PolyScope Robot Parameters Panel (Tool Position & Joint Position)
+   PolyScope Robot Parameters Panel (Tool Position & Joint Position - VNC UI Style)
    ========================================================================== */
 .ur-params-card {
-    background: #ffffff;
-    border-radius: 8px;
-    padding: 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-    border: 1px solid #dfe3e8;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
+    gap: 14px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    box-shadow: none;
 }
 
 .ur-sec {
-    background: #f9fafc;
-    border: 1px solid #dfe3e8;
-    border-radius: 6px;
+    background: #ffffff;
+    border: 1px solid #c2c5c8;
+    border-radius: 2px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.ur-sec-tool {
+    flex-shrink: 0;
+}
+
+.ur-sec-joints {
+    flex: 1;
+    min-height: 0;
 }
 
 .ur-sec-hdr {
-    background: #5e7084;
-    color: #ffffff;
+    background-color: #c2c5c8;
+    color: #000000;
     font-weight: 700;
-    font-size: 13px;
-    padding: 5px 12px;
-    letter-spacing: 0.4px;
+    font-size: 15px;
+    padding: 6px 14px;
+    letter-spacing: 0.2px;
     text-transform: none;
+    border-bottom: 1px solid #b0b3b6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "DejaVu Sans", "Liberation Sans", sans-serif;
+    user-select: none;
 }
 
+/* Tool Position Styling */
 .ur-tcp-body {
-    padding: 8px 10px;
+    padding: 12px 14px;
+    background: #ffffff;
 }
 
 .ur-tcp-table {
     width: 100%;
     border-collapse: separate;
-    border-spacing: 4px 4px;
+    border-spacing: 6px 8px;
 }
 
 .ur-tcp-lbl {
-    font-weight: 700;
-    font-size: 13px;
-    color: #1e293b;
-    width: 20px;
+    font-weight: 500;
+    font-size: 15px;
+    color: #333333;
+    width: 24px;
     text-align: right;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+}
+
+.ur-tcp-lbl-r {
+    padding-left: 12px;
 }
 
 .ur-tcp-val-box {
-    background: #edf0f4;
-    border: 1px solid #d5dce4;
-    border-radius: 4px;
-    padding: 3px 6px;
+    background: #ffffff;
+    border: 1px solid #999999;
+    border-radius: 2px;
+    padding: 4px 8px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 700;
-    color: #1e293b;
+    color: #000000;
     text-align: right;
-    box-shadow: none;
+    min-width: 85px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .ur-tcp-unit {
-    font-size: 12px;
-    color: #6b7a8d;
-    font-weight: 500;
-    width: 26px;
+    font-size: 14px;
+    color: #333333;
+    font-weight: 400;
+    width: 28px;
     padding-left: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
 }
 
-/* Joint Position styling */
+/* Joint Position Styling (VNC UI PolyScope Style) */
 .ur-joints-body {
-    padding: 8px 10px;
+    flex: 1;
+    min-height: 0;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 10px;
+    background: #ffffff;
 }
 
 .ur-joint-item {
     display: flex;
     flex-direction: column;
+    justify-content: center;
 }
 
 .ur-joint-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
 }
 
-.ur-joint-arr {
-    color: #5e7084;
-    font-size: 14px;
+.ur-joint-arr-svg {
+    width: 24px;
+    height: 24px;
+    fill: #75bef8;
+    flex-shrink: 0;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.08));
+    transition: transform 0.1s ease, fill 0.1s ease;
     user-select: none;
-    line-height: 1;
+    cursor: pointer;
+}
+
+.ur-joint-arr-svg:hover {
+    fill: #5ea8e2;
+    transform: scale(1.1);
+}
+
+.ur-joint-center-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ur-joint-info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
 .ur-joint-label-group {
     display: flex;
     align-items: baseline;
-    gap: 4px;
-    flex: 1;
-    margin: 0 6px;
+    gap: 6px;
 }
 
 .ur-joint-name {
-    font-weight: 700;
-    font-size: 12px;
-    color: #1e293b;
+    font-weight: 600;
+    font-size: 15px;
+    color: #222222;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
 }
 
 .ur-joint-rad {
-    font-size: 11px;
-    color: #6b7a8d;
-    font-weight: 500;
+    font-size: 12px;
+    color: #777777;
+    font-weight: 400;
     font-family: ui-monospace, SFMono-Regular, monospace;
 }
 
+.ur-joint-val-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ur-joint-arr-svg:active,
+.ur-joint-arr-svg.active {
+    fill: #2563eb;
+    transform: scale(0.92);
+}
+
 .ur-joint-val-box {
-    background: #edf0f4;
-    border: 1px solid #d5dce4;
-    border-radius: 4px;
-    padding: 2px 6px;
+    background: #ffffff;
+    border: 1px solid #999999;
+    border-radius: 2px;
+    padding: 3px 8px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 700;
-    color: #1e293b;
+    color: #000000;
     text-align: right;
-    min-width: 60px;
-    box-shadow: none;
+    min-width: 82px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+    cursor: text;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ur-joint-val-box:focus-within {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+    outline: none;
+}
+
+.ur-joint-val-box span:focus {
+    outline: none;
 }
 
 .ur-joint-deg-unit {
-    font-size: 12px;
-    font-weight: 700;
-    color: #6b7a8d;
-    margin: 0 4px 0 2px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #333333;
+    width: 14px;
 }
 
+/* Ruler Track Styling with Industrial Ticks */
 .ur-track-wrap {
     position: relative;
-    height: 8px;
-    background: #e2e6eb;
-    border: 1px solid #c4cdd5;
-    border-radius: 3px;
-    margin: 3px 16px 4px 16px;
+    height: 11px;
+    background: #e6e6e6;
+    border: 1px solid #555555;
+    border-radius: 1px;
+    box-sizing: border-box;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+
+.ur-track-tick-e0 {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #555555;
+}
+
+.ur-track-tick-e1 {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #555555;
 }
 
 .ur-track-tick-mid {
@@ -701,37 +830,44 @@ button {
     top: 0;
     bottom: 0;
     width: 1px;
-    background: #8c9bae;
+    background: #555555;
 }
 
 .ur-track-tick-q1 {
     position: absolute;
     left: 25%;
-    top: 1px;
-    bottom: 1px;
+    top: 2px;
+    bottom: 2px;
     width: 1px;
-    background: #94a3b8;
+    background: #777777;
 }
 
 .ur-track-tick-q3 {
     position: absolute;
     left: 75%;
-    top: 1px;
-    bottom: 1px;
+    top: 2px;
+    bottom: 2px;
     width: 1px;
-    background: #94a3b8;
+    background: #777777;
 }
 
+/* Kim chỉ tam giác đen hướng lên ở đáy thước đo */
 .ur-track-pointer {
     position: absolute;
     bottom: -6px;
     transform: translateX(-50%);
     width: 0;
     height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 6px solid #8cb82b;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 7px solid #000000;
     transition: left 0.05s linear;
+    z-index: 2;
+    cursor: grab;
+}
+
+.ur-track-wrap.dragging .ur-track-pointer {
+    cursor: grabbing;
 }
 
 .ur-status-footer {
