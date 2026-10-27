@@ -503,6 +503,13 @@ class TeleoperationController:
         self._prev_dq = np.zeros(6, dtype=float)
         self._smoothed_damping = 1.0
 
+    def reset_teleop_session(self, q_current: Optional[List[float]] = None):
+        """
+        Khôi phục và làm mới mốc tham chiếu khi có phiên WebXR mới hoặc kết nối lại,
+        giữ nguyên cờ enabled mà không bắt người dùng phải Tắt/Bật lại Teleop.
+        """
+        self.notify_clutch_released(q_current)
+
     def stop(self, a: float = 10.0, *args, **kwargs):
         """Stop teleoperation and halt robot motion with deceleration limit."""
         self.enabled = False
@@ -541,15 +548,23 @@ class TeleoperationController:
         """
         Wrist-Saturation Detection during pure rotation:
         Chỉ đóng băng bước xoay khi ít nhất 1 trong 3 khớp cổ tay (q_ik[3], q_ik[4], q_ik[5])
-        thực sự chạm hoặc vượt biên giới hạn vật lý UR3E_LIMITS.
+        thực sự chạm hoặc vượt biên giới hạn vật lý UR3E_LIMITS, hoặc phát hiện nhảy nhánh ngược chiều (Anti-Unwind).
         Tuyệt đối không so sánh tỷ lệ base hay giới hạn cứng q0 để cho phép bù tâm tự nhiên khi xoay Roll/Pitch.
         """
         lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
         upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-        WRIST_LIMIT_MARGIN = float(os.environ.get("WRIST_LIMIT_MARGIN", str(np.deg2rad(1.0))))  # margin 1.0 deg
+        WRIST_LIMIT_MARGIN = float(os.environ.get("WRIST_LIMIT_MARGIN", str(np.deg2rad(0.5))))  # margin 0.5 deg (~0.0087 rad)
 
         # Khớp cổ tay chạm hoặc vượt UR3E_LIMITS (wrist_1, wrist_2, wrist_3)
         for w_idx in (3, 4, 5):
+            # 1. Chống nhảy nhánh ngược chiều (Anti-Unwind & Branch-Flip Guard):
+            # Chỉ kích hoạt khi thực sự sát biên (< 0.03 rad) và nghiệm IK đột ngột nhảy ngược chiều cực lớn (> 1.20 rad) do lật nhánh 2pi
+            if q_prev_valid[w_idx] >= upper_limits[w_idx] - 0.03 and (q_ik[w_idx] - q_prev_valid[w_idx] < -1.20):
+                return True, f"wrist_{w_idx-2} anti-unwind branch flip blocked at upper limit ({q_prev_valid[w_idx]:.3f} -> {q_ik[w_idx]:.3f})"
+            if q_prev_valid[w_idx] <= lower_limits[w_idx] + 0.03 and (q_ik[w_idx] - q_prev_valid[w_idx] > 1.20):
+                return True, f"wrist_{w_idx-2} anti-unwind branch flip blocked at lower limit ({q_prev_valid[w_idx]:.3f} -> {q_ik[w_idx]:.3f})"
+
+            # 2. Khớp cổ tay chạm hoặc vượt UR3E_LIMITS
             # Cận trên:
             if q_ik[w_idx] >= upper_limits[w_idx] - WRIST_LIMIT_MARGIN:
                 if q_ik[w_idx] >= q_prev_valid[w_idx] - 1e-5:
@@ -566,7 +581,7 @@ class TeleoperationController:
         """
         Anti-windup re-anchoring when touching limits or barriers:
         For relative delta sources (VR controller), clamps smoothed_target to within 30mm position
-        and 0.25 rad orientation of current TCP, and re-anchors the delta pose source to prevent target runaway.
+        and 0.08 rad orientation of current TCP, and re-anchors the delta pose source to prevent target runaway.
         For absolute sources (Viser Gizmo), does not clamp smoothed_target to prevent drift from ui.gizmo.
         """
         is_absolute = getattr(self._pose, "is_absolute", False)
@@ -587,7 +602,7 @@ class TeleoperationController:
                     dot_q = -dot_q
                 dot_q = min(1.0, max(-1.0, dot_q))
                 theta = float(2.0 * math.acos(dot_q))
-                MAX_REANCHOR_THETA = 0.25  # rad (~14.3 deg)
+                MAX_REANCHOR_THETA = 0.08  # rad (~4.6 deg) - tightly tether orientation target to prevent windup
                 if theta > MAX_REANCHOR_THETA and math.sin(theta / 2.0) > 1e-4:
                     t_slerp = MAX_REANCHOR_THETA / theta
                     sin_th = math.sin(theta / 2.0)
@@ -599,6 +614,11 @@ class TeleoperationController:
         if self._pose is not None and hasattr(self._pose, "reanchor_position"):
             try:
                 self._pose.reanchor_position(p_curr)
+            except Exception:
+                pass
+        if self._pose is not None and hasattr(self._pose, "clamp_rotation_anchor"):
+            try:
+                self._pose.clamp_rotation_anchor(q_curr_wxyz)
             except Exception:
                 pass
 
@@ -1046,6 +1066,19 @@ class TeleoperationController:
             is_wrist_sat = False
             wrist_sat_reason = ""
 
+            # Check general anti-unwind branch flip across all 6 joints against last valid
+            if self._last_valid_q is not None:
+                lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
+                upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
+                SAFE_EPS = 1e-3
+                for i in range(6):
+                    if self._last_valid_q[i] >= upper_limits[i] - 0.03 and (q_target[i] - self._last_valid_q[i] < -1.20):
+                        q_target[i] = float(upper_limits[i] - SAFE_EPS)
+                        at_joint_limit = True
+                    elif self._last_valid_q[i] <= lower_limits[i] + 0.03 and (q_target[i] - self._last_valid_q[i] > 1.20):
+                        q_target[i] = float(lower_limits[i] + SAFE_EPS)
+                        at_joint_limit = True
+
             if is_pure_rotation:
                 q_prev_valid = np.array(
                     self._last_pure_valid_q if self._last_pure_valid_q is not None else (self._last_valid_q if self._last_valid_q is not None else q_real),
@@ -1054,8 +1087,11 @@ class TeleoperationController:
                 q_ik_eval = np.array(result_ik.get("raw_q", q_target), dtype=float)
                 is_wrist_sat, wrist_sat_reason = self._check_wrist_saturation(q_ik_eval, q_prev_valid)
 
+                # Freeze Rotation on Limit:
+                # Chỉ đóng băng khi khớp cổ tay thực sự chạm giới hạn vật lý theo chiều vượt biên (is_wrist_sat)
                 if is_wrist_sat:
                     at_joint_limit = True
+                    is_wrist_sat = True
                     # 1. Từ chối đồng bộ cả bước tăng đó: Giữ nguyên toàn bộ vector 6 khớp tại cấu hình chuẩn ngay trước đó
                     q_target = list(q_prev_valid)
                     self._prev_dq = np.zeros(6, dtype=float)
@@ -1162,7 +1198,7 @@ class TeleoperationController:
                 lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
                 upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
                 SAFE_EPS = 1e-3
-                LIMIT_ZONE = 0.025
+                LIMIT_ZONE = 0.010
                 q_target = np.clip(q_target, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
                 at_joint_limit = at_joint_limit or bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
                                                                (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
@@ -1294,7 +1330,7 @@ class TeleoperationController:
 
         lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
         upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-        LIMIT_ZONE = 0.025  # Limit zone for flagging true physical JOINT LIMIT status (25 mrad ~ 1.4 deg)
+        LIMIT_ZONE = 0.010  # Limit zone for flagging true physical JOINT LIMIT status (10 mrad ~ 0.57 deg)
         is_true_joint_limit = False
         if self._last_valid_q is not None:
             dq_dir = np.array(q_target) - np.array(self._last_valid_q)
@@ -1317,14 +1353,14 @@ class TeleoperationController:
             q_cmd_xyzw = [raw_q_norm[1], raw_q_norm[2], raw_q_norm[3], raw_q_norm[0]]
             dot_rot = min(1.0, max(-1.0, abs(float(np.dot(q_t_xyzw, q_cmd_xyzw)))))
             rot_err_rad = 2.0 * math.acos(dot_rot)
-            if rot_err_rad > 1.05:  # > 60 deg unreachable orientation discrepancy
+            if rot_err_rad > 1.80:  # > 103 deg unreachable orientation discrepancy
                 is_rot_reach_limit = True
 
         if not self_chk.get("safe", True) or self_chk.get("min_dist", 1.0) <= getattr(self._solver, "clearance_threshold", 0.01) + 0.0005:
             new_status = "SELF COLLISION"
         elif not tbl_chk.get("safe", True) or tbl_chk.get("min_clearance", 1.0) <= 0.001:
             new_status = "ENV COLLISION"
-        elif is_true_joint_limit or is_rot_reach_limit or is_wrist_sat:
+        elif is_true_joint_limit or is_wrist_sat:
             new_status = "JOINT LIMIT"
         elif is_near_sing:
             if "WRIST" in sing_types:
@@ -1336,7 +1372,7 @@ class TeleoperationController:
         else:
             new_status = "OK"
 
-        if is_wrist_sat and wrist_sat_reason and new_status == "JOINT LIMIT" and new_status != self._last_logged_status:
+        if (is_wrist_sat or at_joint_limit) and wrist_sat_reason and new_status == "JOINT LIMIT" and new_status != self._last_logged_status:
             self.log_diagnostic_block("JOINT LIMIT", wrist_sat_reason, q_target, result_ik, pose)
 
         with self._lock:

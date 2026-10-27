@@ -57,12 +57,12 @@ _ACTUATED_JOINT_NAMES = [
 
 # Safe joint angle limits for UR3e (Radians) - full freedom, protected by skin-tight collision
 UR3E_LIMITS = [
-    (-math.pi, math.pi),          # shoulder_pan_joint:  [-180, +180]
-    (-2.65, 0.20),                # shoulder_lift_joint: [-151.8, +11.5] (extended tilt range)
-    (-0.08, 3.00),                 # elbow_joint:         [-4.6, +171.8] (safe range, allows straight arm down to -0.86° / -0.015 rad)
-    (-2.95, 2.95),                # wrist_1_joint:       [-169°, +169°] (chống xoắn gập camera/mount)
-    (-2.95, 2.95),                # wrist_2_joint:       [-169°, +169°] (chống xoắn gập camera/mount)
-    (-3.05, 3.05),                # wrist_3_joint:       [-175°, +175°] (chống vặn cáp camera)
+    (-math.pi, math.pi),          # shoulder_pan_joint:  [-180°, +180°]
+    (-2.65, 0.20),                # shoulder_lift_joint: [-151.8°, +11.5°] (extended tilt range)
+    (-0.08, 3.00),                # elbow_joint:         [-4.6°, +171.8°] (allows straight arm down to -0.86°)
+    (-math.pi, math.pi),          # wrist_1_joint:       [-180°, +180°] (nới lỏng toàn dải ±pi)
+    (-math.pi, math.pi),          # wrist_2_joint:       [-180°, +180°] (nới lỏng toàn dải ±pi)
+    (-math.pi, math.pi),          # wrist_3_joint:       [-180°, +180°] (nới lỏng toàn dải ±pi)
 ]
 
 
@@ -88,6 +88,11 @@ def _nearest_equivalent(angle: float, current: float, lo: float, hi: float) -> f
     for k in (k_ideal - 1, k_ideal, k_ideal + 1):
         c = angle + k * 2.0 * math.pi
         if lo <= c <= hi and abs(c - current) < 1.2:
+            # Chống nhảy nhánh ngược chiều (Anti-Unwind) khi khớp đang sát biên:
+            if current >= hi - 0.15 and (c - current < -0.25):
+                continue
+            if current <= lo + 0.15 and (c - current > 0.25):
+                continue
             candidates_in_range.append(c)
 
     if candidates_in_range:
@@ -218,7 +223,7 @@ def joint_limit_barrier_residual(
     joint_var: jaxls.Var,
     lower_limits: jnp.ndarray,
     upper_limits: jnp.ndarray,
-    barrier_buffer: float = 0.05,
+    barrier_buffer: float = 0.03,
     barrier_weight: float = 20.0,
     violation_weight: float = 500.0,
 ) -> jnp.ndarray:
@@ -596,7 +601,7 @@ class PyrokiIKSolver:
                 joint_var=q_var,
                 lower_limits=lower_limits_j,
                 upper_limits=upper_limits_j,
-                barrier_buffer=0.05,
+                barrier_buffer=0.03,
                 barrier_weight=20.0,
                 violation_weight=500.0,
             )
@@ -714,9 +719,9 @@ class PyrokiIKSolver:
         types = []
         details_parts = []
 
-        # 1. Wrist Singularity: alpha ramps 0.0 -> 1.0 as sin_q4 goes from 0.20 rad down to 0.03 rad
-        WRIST_OUTER = 0.20   # rad (~11.5 deg)
-        WRIST_INNER = 0.03   # rad (~1.7 deg)
+        # 1. Wrist Singularity: alpha ramps 0.0 -> 1.0 as sin_q4 goes from 0.06 rad down to 0.015 rad
+        WRIST_OUTER = 0.06   # rad (~3.4 deg)
+        WRIST_INNER = 0.015  # rad (~0.86 deg)
         if sin_q4 >= WRIST_OUTER:
             raw_wrist = 0.0
         elif sin_q4 <= WRIST_INNER:
@@ -729,9 +734,9 @@ class PyrokiIKSolver:
             types.append("WRIST")
             details_parts.append(f"WRIST: sin(q4)={sin_q4:.4f} (q4={q4:.3f} rad, alpha={alpha_wrist:.2f})")
 
-        # 2. Elbow Singularity / Max Reach: alpha ramps 0.0 -> 1.0 as sin_q2 goes from 0.25 rad down to 0.05 rad
-        ELBOW_OUTER = 0.25   # rad (~14.3 deg)
-        ELBOW_INNER = 0.05   # rad (~2.9 deg)
+        # 2. Elbow Singularity / Max Reach: alpha ramps 0.0 -> 1.0 as sin_q2 goes from 0.05 rad down to 0.01 rad
+        ELBOW_OUTER = 0.05   # rad (~2.86 deg)
+        ELBOW_INNER = 0.01   # rad (~0.57 deg)
         if sin_q2 >= ELBOW_OUTER:
             raw_elbow = 0.0
         elif sin_q2 <= ELBOW_INNER:
@@ -740,8 +745,8 @@ class PyrokiIKSolver:
             raw_elbow = (ELBOW_OUTER - sin_q2) / (ELBOW_OUTER - ELBOW_INNER)
         alpha_elbow = raw_elbow * raw_elbow * (3.0 - 2.0 * raw_elbow)
 
-        REACH_LIMIT = 0.51  # meters
-        REACH_START = 0.48
+        REACH_LIMIT = 0.535  # meters
+        REACH_START = 0.515
         if shoulder_r_xy >= REACH_LIMIT:
             alpha_elbow = 1.0
         elif shoulder_r_xy > REACH_START:
@@ -752,9 +757,9 @@ class PyrokiIKSolver:
             types.append("ELBOW")
             details_parts.append(f"ELBOW: sin(q2)={sin_q2:.4f}, R_xy={shoulder_r_xy:.3f}m (q2={q2:.3f} rad, alpha={alpha_elbow:.2f})")
 
-        # 3. Shoulder / Overhead Singularity: alpha ramps 0.0 -> 1.0 as r_effective goes from 0.05m down to 0.02m
-        SHOULDER_OUTER = 0.05  # meters
-        SHOULDER_INNER = 0.02  # meters
+        # 3. Shoulder / Overhead Singularity: alpha ramps 0.0 -> 1.0 as r_effective goes from 0.03m down to 0.01m
+        SHOULDER_OUTER = 0.03  # meters
+        SHOULDER_INNER = 0.01  # meters
         if r_effective >= SHOULDER_OUTER:
             raw_shoulder = 0.0
         elif r_effective <= SHOULDER_INNER:
@@ -772,7 +777,7 @@ class PyrokiIKSolver:
         # Continuous smooth damping factor: 1.0 (no singularity) down to 0.75 (deep singularity)
         damping = 1.0 - 0.25 * alpha
 
-        is_singular = alpha > 0.05
+        is_singular = alpha >= 0.50
         details = " | ".join(details_parts) if details_parts else "No singularity detected"
 
         return {
@@ -980,8 +985,29 @@ class PyrokiIKSolver:
             norm_q = normalize_to_current(raw_q, ref_seed)
 
             # Khôi phục luồng nghiệm IK chuẩn xác nguyên bản từ PyRoki JIT (bảo toàn 100% Jacobian 6 khớp)
-            q_candidate = norm_q
+            q_candidate = list(norm_q)
             body_swing_blocked = False
+
+            lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
+            upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
+            SAFE_EPS = 1e-3
+            LIMIT_ZONE = 0.010  # Limit zone for flagging true physical JOINT LIMIT status (10 mrad ~ 0.57 deg)
+
+            # Chống nhảy nhánh ngược chiều (Anti-Unwind & Branch-Flip Guard):
+            # Chỉ kích hoạt khi một khớp thực sự chạm sát biên UR3E_LIMITS (< 0.03 rad)
+            # và nghiệm IK đột ngột nhảy ngược chiều một bước cực lớn (> 1.20 rad) do lật nhánh 2pi.
+            unwind_detected = False
+            for i in range(6):
+                # Sát cận trên và nhảy lùi xuống cực lớn
+                if ref_seed[i] >= upper_limits[i] - 0.03:
+                    if q_candidate[i] - ref_seed[i] < -1.20:
+                        q_candidate[i] = float(upper_limits[i] - SAFE_EPS)
+                        unwind_detected = True
+                # Sát cận dưới và nhảy tiến lên cực lớn
+                elif ref_seed[i] <= lower_limits[i] + 0.03:
+                    if q_candidate[i] - ref_seed[i] > 1.20:
+                        q_candidate[i] = float(lower_limits[i] + SAFE_EPS)
+                        unwind_detected = True
 
             # Post-solve FK position error check
             fk_check = self.fk(q_candidate)
@@ -990,14 +1016,9 @@ class PyrokiIKSolver:
             dt_ms = (time.perf_counter() - t0) * 1000.0
 
             # Per-joint soft clamping: Never hard-reject a solution due to joint limits
-            lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
-            upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
-            SAFE_EPS = 1e-3
-
-            LIMIT_ZONE = 0.025  # Limit zone for flagging true physical JOINT LIMIT status (25 mrad ~ 1.4 deg)
             clamped_norm_q = np.clip(q_candidate, lower_limits + SAFE_EPS, upper_limits - SAFE_EPS).tolist()
-            at_joint_limit = bool(np.any((np.array(clamped_norm_q) <= lower_limits + LIMIT_ZONE) |
-                                         (np.array(clamped_norm_q) >= upper_limits - LIMIT_ZONE)))
+            at_joint_limit = unwind_detected or bool(np.any((np.array(clamped_norm_q) <= lower_limits + LIMIT_ZONE) |
+                                                           (np.array(clamped_norm_q) >= upper_limits - LIMIT_ZONE)))
 
             # Collision safety check (Self-collision & Table-collision) at 0.0mm threshold (WYSIWYG)
             self_chk = self.check_self_collision(norm_q, verbose=False)
