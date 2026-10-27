@@ -17,7 +17,7 @@ import time
 import math
 import socket
 import threading
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Tuple
 
 import numpy as np
 import torch
@@ -382,9 +382,11 @@ class TeleoperationController:
         self._arm_anchor_p: Optional[np.ndarray] = None
         self._rot_anchor_body_q: Optional[np.ndarray] = None
 
-        # Trạng thái giám sát độ tinh khiết trục xoay (FK Axis-Purity Guard)
+        # Trạng thái giám sát độ tinh khiết trục xoay (FK Axis-Purity Guard & Wrist Saturation Freeze)
         self._last_pure_valid_q: Optional[np.ndarray] = None
+        self._last_pure_valid_quat: Optional[np.ndarray] = None
         self._last_pure_theta: float = 0.0
+        self._grip_start_q0: Optional[float] = None
         self._rot_origin_R: Optional[Any] = None
         self._rot_locked_axis: Optional[np.ndarray] = None
 
@@ -425,7 +427,9 @@ class TeleoperationController:
             self._prev_linear_vel = np.zeros(3, dtype=float)
             self._prev_dq = np.zeros(6, dtype=float)
             self._last_pure_valid_q = None
+            self._last_pure_valid_quat = None
             self._last_pure_theta = 0.0
+            self._grip_start_q0 = None
             self._rot_origin_R = None
             self._rot_locked_axis = None
             if hasattr(self._solver, "reset_smoothing"):
@@ -441,7 +445,9 @@ class TeleoperationController:
         self._arm_anchor_p = None
         self._rot_anchor_body_q = None
         self._last_pure_valid_q = None
+        self._last_pure_valid_quat = None
         self._last_pure_theta = 0.0
+        self._grip_start_q0 = None
         self._rot_origin_R = None
         self._rot_locked_axis = None
         self._prev_linear_vel = np.zeros(3, dtype=float)
@@ -476,7 +482,9 @@ class TeleoperationController:
         self._arm_anchor_p = None
         self._rot_anchor_body_q = None
         self._last_pure_valid_q = None
+        self._last_pure_valid_quat = None
         self._last_pure_theta = 0.0
+        self._grip_start_q0 = None
         self._rot_origin_R = None
         self._rot_locked_axis = None
         q_ref = q_current if q_current is not None else self._last_valid_q
@@ -528,6 +536,52 @@ class TeleoperationController:
             self._last_logged_status = block_tag
             self._last_block_tag = block_tag
             print(f"[Teleop Status] {block_tag}")
+
+    def _check_wrist_saturation(self, q_ik: np.ndarray, q_prev_valid: np.ndarray) -> Tuple[bool, str]:
+        """
+        Wrist-Saturation & Base-Takeover Detection during pure rotation:
+        Kiểm tra 2 dấu hiệu:
+        1. Khớp cổ tay chạm hoặc vượt UR3E_LIMITS (margin 1.5°).
+        2. Khớp base bị ép xoay vọt để gánh thay cổ tay (Base Takeover):
+           - |Δq0| > 0.8 * |Δq_wrist| khi |Δq0| > 0.3°
+           - Hoặc tổng góc lệch tích lũy |q_ik[0] - q_grip_start[0]| > 18°
+        """
+        lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
+        upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
+        WRIST_LIMIT_MARGIN = float(os.environ.get("WRIST_LIMIT_MARGIN", str(np.deg2rad(1.5))))
+
+        # Dấu hiệu 1: Khớp cổ tay chạm UR3E_LIMITS (wrist_1, wrist_2, wrist_3)
+        for w_idx in (3, 4, 5):
+            # Cận trên:
+            if q_ik[w_idx] >= upper_limits[w_idx] - WRIST_LIMIT_MARGIN:
+                if q_ik[w_idx] >= q_prev_valid[w_idx] - 1e-5:
+                    return True, f"wrist_{w_idx-2} reached upper limit ({q_ik[w_idx]:.3f} >= {upper_limits[w_idx]-WRIST_LIMIT_MARGIN:.3f})"
+            # Cận dưới:
+            elif q_ik[w_idx] <= lower_limits[w_idx] + WRIST_LIMIT_MARGIN:
+                if q_ik[w_idx] <= q_prev_valid[w_idx] + 1e-5:
+                    return True, f"wrist_{w_idx-2} reached lower limit ({q_ik[w_idx]:.3f} <= {lower_limits[w_idx]+WRIST_LIMIT_MARGIN:.3f})"
+
+        # Dấu hiệu 2: Khớp base bị ép xoay vọt để gánh thay cổ tay (Base Takeover)
+        delta_q0 = abs(q_ik[0] - q_prev_valid[0])
+        delta_wrist = (
+            abs(q_ik[3] - q_prev_valid[3]) +
+            abs(q_ik[4] - q_prev_valid[4]) +
+            abs(q_ik[5] - q_prev_valid[5])
+        )
+
+        BASE_TAKEOVER_THRESH = float(os.environ.get("BASE_TAKEOVER_THRESH", str(np.deg2rad(0.3))))  # 0.3 deg
+        if delta_q0 > BASE_TAKEOVER_THRESH and delta_q0 > 0.8 * delta_wrist:
+            return True, f"Base takeover detected: |Δq0|={np.degrees(delta_q0):.2f}° > 0.8 * |Δq_wrist|={np.degrees(delta_wrist):.2f}°"
+
+        if getattr(self, "_grip_start_q0", None) is not None:
+            cum_base_drift = abs(q_ik[0] - self._grip_start_q0)
+            BASE_CUM_DRIFT_LIMIT = float(os.environ.get("BASE_CUM_DRIFT_LIMIT", "0.014"))  # 0.014 rad (~0.8°)
+            if cum_base_drift > BASE_CUM_DRIFT_LIMIT:
+                prev_cum_drift = abs(q_prev_valid[0] - self._grip_start_q0)
+                if cum_base_drift >= prev_cum_drift - 1e-5:
+                    return True, f"Base cumulative drift {np.degrees(cum_base_drift):.1f}° > {np.degrees(BASE_CUM_DRIFT_LIMIT):.1f}°"
+
+        return False, ""
 
     def _apply_anti_windup_reanchor(self, p_curr: np.ndarray, q_curr_wxyz: np.ndarray):
         """
@@ -824,7 +878,9 @@ class TeleoperationController:
             self._arm_anchor_q = None
             self._arm_anchor_p = None
             self._rot_anchor_body_q = None
+            self._grip_start_q0 = None
             self._last_pure_valid_q = None
+            self._last_pure_valid_quat = None
             self._last_pure_theta = 0.0
             self._rot_origin_R = None
             self._rot_locked_axis = None
@@ -847,6 +903,7 @@ class TeleoperationController:
                     # Latch arm anchor from current actual body joints and current target position
                     self._arm_anchor_q = np.array(q_real[:3], dtype=float)
                     self._arm_anchor_p = np.copy(user_cmd_p)
+                    self._grip_start_q0 = float(q_real[0])
                     # Latch pure reference orientation from pose source or actual robot FK
                     R_origin_val = getattr(self._pose, "R_tcp_origin", None)
                     if R_origin_val is not None and isinstance(R_origin_val, R):
@@ -856,6 +913,7 @@ class TeleoperationController:
                         qw0 = fk_orig["quat"]
                         self._rot_origin_R = R.from_quat([qw0[1], qw0[2], qw0[3], qw0[0]])
                     self._last_pure_valid_q = np.array(q_real, dtype=float)
+                    self._last_pure_valid_quat = np.copy(raw_q_norm)
                     self._last_pure_theta = 0.0
                 self._rot_anchor_body_q = self._arm_anchor_q
                 axis_val = getattr(self._pose, "locked_rotation_axis", None)
@@ -874,7 +932,9 @@ class TeleoperationController:
                 self._arm_anchor_q = None
                 self._arm_anchor_p = None
                 self._rot_anchor_body_q = None
+                self._grip_start_q0 = None
                 self._last_pure_valid_q = None
+                self._last_pure_valid_quat = None
                 self._last_pure_theta = 0.0
                 self._rot_origin_R = None
                 self._rot_locked_axis = None
@@ -1004,9 +1064,33 @@ class TeleoperationController:
             q_target = result_ik["q"]
             is_sliding = result_ik.get("sliding_on_barrier", False)
             at_joint_limit = result_ik.get("at_joint_limit", False)
+            is_wrist_sat = False
+            wrist_sat_reason = ""
 
             if is_pure_rotation:
-                self._last_pure_valid_q = np.array(q_target, dtype=float)
+                q_prev_valid = np.array(
+                    self._last_pure_valid_q if self._last_pure_valid_q is not None else (self._last_valid_q if self._last_valid_q is not None else q_real),
+                    dtype=float
+                )
+                q_ik_eval = np.array(result_ik.get("raw_q", q_target), dtype=float)
+                is_wrist_sat, wrist_sat_reason = self._check_wrist_saturation(q_ik_eval, q_prev_valid)
+
+                if is_wrist_sat:
+                    at_joint_limit = True
+                    # 1. Từ chối đồng bộ cả bước tăng đó: Giữ nguyên toàn bộ vector 6 khớp tại cấu hình chuẩn ngay trước đó
+                    q_target = list(q_prev_valid)
+                    self._prev_dq = np.zeros(6, dtype=float)
+
+                    # 2. Chốt cứng hướng mục tiêu R_target tại R_prev_valid (Zero Windup)
+                    if self._last_pure_valid_quat is not None:
+                        self._smoothed_quat = np.copy(self._last_pure_valid_quat)
+
+                    if self._pose is not None and hasattr(self._pose, "clamp_rotation_anchor"):
+                        fk_valid = self._solver.fk(q_target)
+                        self._pose.clamp_rotation_anchor(fk_valid["quat"])
+                else:
+                    self._last_pure_valid_q = np.array(q_target, dtype=float)
+                    self._last_pure_valid_quat = np.copy(self._smoothed_quat)
 
             # Target Projection & Re-anchoring to prevent integrator windup when sliding or touching true joint limit
             if (is_sliding or at_joint_limit) and self._pose is not None:
@@ -1015,7 +1099,7 @@ class TeleoperationController:
             # Adaptive Joint EMA Filter: when entering singularity (sing_alpha > 0), smoothly blend
             # joint positions with previous frame to eliminate high-frequency discrete solver noise
             sing_alpha = result_ik.get("singularity_alpha", 0.0)
-            if sing_alpha > 0.01 and self._last_valid_q is not None:
+            if not is_wrist_sat and sing_alpha > 0.01 and self._last_valid_q is not None:
                 ema_weight = 0.15 * sing_alpha  # 0% at alpha=0, up to 15% at alpha=1 for nimble tracking
                 q_target = [
                     (1.0 - ema_weight) * q_target[i] + ema_weight * self._last_valid_q[i]
@@ -1108,7 +1192,7 @@ class TeleoperationController:
 
                 # Joint-Space Smoothing: preserve exact acceleration continuity and eliminate 20Hz discrete jitter
                 ALPHA_Q = float(os.environ.get("JOINT_SMOOTH_ALPHA", "0.80"))
-                if ALPHA_Q < 0.999 and self._last_valid_q is not None and not self._was_clutch_released:
+                if not is_wrist_sat and ALPHA_Q < 0.999 and self._last_valid_q is not None and not self._was_clutch_released:
                     q_target = [
                         ALPHA_Q * q_target[i] + (1.0 - ALPHA_Q) * self._last_valid_q[i]
                         for i in range(6)
@@ -1232,8 +1316,19 @@ class TeleoperationController:
         lower_limits = np.array([lo for lo, hi in UR3E_LIMITS], dtype=float)
         upper_limits = np.array([hi for lo, hi in UR3E_LIMITS], dtype=float)
         LIMIT_ZONE = 0.025  # Limit zone for flagging true physical JOINT LIMIT status (25 mrad ~ 1.4 deg)
-        is_true_joint_limit = bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
-                                          (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
+        is_true_joint_limit = False
+        if self._last_valid_q is not None:
+            dq_dir = np.array(q_target) - np.array(self._last_valid_q)
+            for i in range(6):
+                if q_target[i] >= upper_limits[i] - LIMIT_ZONE and dq_dir[i] >= -1e-5:
+                    is_true_joint_limit = True
+                    break
+                if q_target[i] <= lower_limits[i] + LIMIT_ZONE and dq_dir[i] <= 1e-5:
+                    is_true_joint_limit = True
+                    break
+        else:
+            is_true_joint_limit = bool(np.any((np.array(q_target) <= lower_limits + LIMIT_ZONE) |
+                                              (np.array(q_target) >= upper_limits - LIMIT_ZONE)))
 
         # Extreme orientation reach boundary detection (when pure rotation target exceeds reachable envelope by > 60 deg)
         is_rot_reach_limit = False
@@ -1250,7 +1345,7 @@ class TeleoperationController:
             new_status = "SELF COLLISION"
         elif not tbl_chk.get("safe", True) or tbl_chk.get("min_clearance", 1.0) <= 0.001:
             new_status = "ENV COLLISION"
-        elif is_true_joint_limit or is_rot_reach_limit:
+        elif is_true_joint_limit or is_rot_reach_limit or is_wrist_sat:
             new_status = "JOINT LIMIT"
         elif is_near_sing:
             if "WRIST" in sing_types:
@@ -1261,6 +1356,9 @@ class TeleoperationController:
                 new_status = "SINGULARITY"
         else:
             new_status = "OK"
+
+        if is_wrist_sat and wrist_sat_reason and new_status == "JOINT LIMIT" and new_status != self._last_logged_status:
+            self.log_diagnostic_block("JOINT LIMIT", wrist_sat_reason, q_target, result_ik, pose)
 
         with self._lock:
             self._status = new_status
