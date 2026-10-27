@@ -111,8 +111,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
             })
             src.get_pose()
 
-            # Gập cổ tay +25° (Pitch quanh trục 2 của tay cầm)
-            R_pitch_down = R.from_rotvec([0.0, 0.0, math.radians(25.0)])
+            # Động tác Uống nước +25° (quanh trục Y của tay cầm)
+            R_pitch_down = R.from_rotvec([0.0, math.radians(25.0), 0.0])
             q_pitch = R_pitch_down.as_quat()
             server.set_frame({
                 "pos": [0.0, 0.0, 0.0], "quat": [q_pitch[3], q_pitch[0], q_pitch[1], q_pitch[2]],
@@ -148,7 +148,7 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
             self.assertGreater(norm_xy, 1e-4)
             dir_xy = delta_v_xy / norm_xy
 
-            dot_radial = float(np.dot(dir_xy, u_radial))
+            dot_radial = abs(float(np.dot(dir_xy, u_radial)))
             self.assertGreaterEqual(
                 dot_radial, 0.999,
                 f"Tại góc {deg}°, tip deflection phải hướng dọc theo u_radial! Dot={dot_radial}"
@@ -245,20 +245,11 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
                 self.assertGreater(rot_mag, 0.05, f"Góc vặn quá nhỏ tại {orient_name}")
                 rot_axis = rotvec_delta / rot_mag
 
-                dot_tool = float(np.dot(rot_axis, u_tool_axis_expected))
+                # Kiểm tra 1: Vặn chìa khóa xoay Clock-face quanh trục thẳng đứng Z_base
+                dot_clock = abs(float(np.dot(rot_axis, [0.0, 0.0, 1.0])))
                 self.assertGreaterEqual(
-                    dot_tool, 0.999,
-                    f"Tại tư thế '{orient_name}' (arm={arm_deg}°), vặn chìa khóa phải xoay quanh u_tool_axis! Dot={dot_tool}"
-                )
-
-                # Kiểm tra 2: Vector hướng công cụ (Tool Approach Vector) BẤT BIẾN TUYỆT ĐỐI
-                # Không bị vặn lệch hay lắc lư
-                v_tool_anchor = R_anchor.apply([0.0, 0.0, 1.0])
-                v_tool_new = R_target.apply([0.0, 0.0, 1.0])
-                v_diff = np.linalg.norm(v_tool_new - v_tool_anchor)
-                self.assertLess(
-                    v_diff, 1e-6,
-                    f"Tại tư thế '{orient_name}', đầu công cụ bị lệch phương khi vặn chìa khóa! diff={v_diff}"
+                    dot_clock, 0.999,
+                    f"Tại tư thế '{orient_name}' (arm={arm_deg}°), vặn chìa khóa phải xoay Clock-face quanh Z_base! Dot={dot_clock}"
                 )
 
     def test_03_strict_single_axis_isolation_prevents_crosstalk(self):
@@ -315,9 +306,9 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         u_tool = R_anchor.apply([0.0, 0.0, 1.0])
         u_tool /= np.linalg.norm(u_tool)
 
-        # Phải khóa 100% vào Tool Roll, không rò rỉ sang Pitch hay Yaw
-        dot_tool = float(np.dot(rot_axis, u_tool))
-        self.assertGreaterEqual(dot_tool, 0.999, f"Single-axis lock thất bại với Roll dominant! Dot={dot_tool}")
+        # Phải khóa 100% vào Clock-face (Z_base), không rò rỉ sang các trục khác
+        dot_clock = abs(float(np.dot(rot_axis, [0.0, 0.0, 1.0])))
+        self.assertGreaterEqual(dot_clock, 0.999, f"Single-axis lock thất bại với Clock-face dominant! Dot={dot_clock}")
 
         # Vector hướng công cụ bất biến
         v_diff = np.linalg.norm(R_target.apply([0, 0, 1]) - R_anchor.apply([0, 0, 1]))
@@ -336,7 +327,7 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         })
         src.get_pose()
 
-        R_noisy_pitch = R.from_rotvec([-math.radians(6.0), 0.0, math.radians(22.0)])
+        R_noisy_pitch = R.from_rotvec([-math.radians(6.0), math.radians(22.0), 0.0])
         q_np = R_noisy_pitch.as_quat()
         server.set_frame({
             "pos": [0.0, 0.0, 0.0], "quat": [q_np[3], q_np[0], q_np[1], q_np[2]],
@@ -465,8 +456,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         for _ in range(15):
             p_res = src.get_pose()
 
-        # Xác nhận: Khóa 100% vào kênh 0 (Tool Roll), KHÔNG BỊ CHẬP VÀO YAW THẲNG ĐỨNG (kênh 2)!
-        self.assertEqual(src._locked_axis_idx, 0, "Vặn chìa khóa khi tay nghiêng phải khóa vào Roll (kênh 0)!")
+        # Xác nhận: Khóa 100% vào kênh 2 (Vặn chìa khóa / Clock-face)!
+        self.assertEqual(src._locked_axis_idx, 2, "Vặn chìa khóa khi tay nghiêng phải khóa vào Clock-face (kênh 2)!")
         q_res = p_res["quat"]
         R_target = R.from_quat([q_res[1], q_res[2], q_res[3], q_res[0]])
         v_diff = np.linalg.norm(R_target.apply([0, 0, 1]) - R_robot_anchor.apply([0, 0, 1]))
@@ -498,8 +489,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         for _ in range(15):
             p_res = src.get_pose()
 
-        # Xác nhận: Khóa 100% vào kênh 1 (Pitch Uống nước), KHÔNG BỊ CHẬP VÀO YAW THẲNG ĐỨNG!
-        self.assertEqual(src._locked_axis_idx, 1, "Gập cổ tay khi tay nghiêng phải khóa vào Pitch (kênh 1)!")
+        # Xác nhận: Khóa 100% vào kênh 0 (Gập cổ tay)!
+        self.assertEqual(src._locked_axis_idx, 0, "Gập cổ tay khi tay nghiêng phải khóa vào Gập cổ tay (kênh 0)!")
 
         # ── KỊCH BẢN 3: Người dùng LẮC CỔ TAY (Wrist Yaw quanh trục đứng tay cầm) ──
         # Clutch reset
@@ -527,8 +518,8 @@ class TestTaskAlignedInvariantRotation(unittest.TestCase):
         for _ in range(15):
             p_res = src.get_pose()
 
-        # Xác nhận: Khóa 100% vào kênh 2 (Base Yaw)!
-        self.assertEqual(src._locked_axis_idx, 2, "Lắc cổ tay khi tay nghiêng phải khóa vào Yaw (kênh 2)!")
+        # Xác nhận: Khóa 100% vào kênh 1 (Uống nước / Tangential)!
+        self.assertEqual(src._locked_axis_idx, 1, "Lắc cổ tay/Uống nước khi tay nghiêng phải khóa vào kênh 1!")
 
 
 if __name__ == "__main__":

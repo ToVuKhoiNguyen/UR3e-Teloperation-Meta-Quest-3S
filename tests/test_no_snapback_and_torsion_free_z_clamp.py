@@ -65,7 +65,7 @@ class TestNoSnapbackAndTorsionFreeZClamp(unittest.TestCase):
             self.server, self.ctrl, scale=1.0,
             anchor_reference_func=lambda: list(self.ctrl.tcp())
         )
-        self.src.nav_mode = "clock_face"
+        self.src.max_z_rotation_delta = math.radians(35.0)
 
     def test_01_no_snapback_during_continuous_extreme_yaw(self):
         """Test 1A: Xoay Yaw liên tục qua 180° lên tới 220° không snap-back"""
@@ -77,9 +77,9 @@ class TestNoSnapbackAndTorsionFreeZClamp(unittest.TestCase):
         self.src.get_pose()
 
         prev_angle = 0.0
-        # Xoay tiến từ 0 tới 220 độ
+        # Xoay tiến từ 0 tới 220 độ quanh trục Clock-face (trục 0 của tay cầm)
         for deg in range(5, 225, 5):
-            R_yaw = R.from_rotvec([0, math.radians(deg), 0])
+            R_yaw = R.from_rotvec([-math.radians(deg), 0, 0])
             q = R_yaw.as_quat()
             self.server.set_frame({
                 "pos": [0, 0, 0], "quat": [q[3], q[0], q[1], q[2]],
@@ -117,7 +117,7 @@ class TestNoSnapbackAndTorsionFreeZClamp(unittest.TestCase):
 
         prev_angle = 0.0
         for deg in range(-5, -225, -5):
-            R_yaw = R.from_rotvec([0, math.radians(deg), 0])
+            R_yaw = R.from_rotvec([-math.radians(deg), 0, 0])
             q = R_yaw.as_quat()
             self.server.set_frame({
                 "pos": [0, 0, 0], "quat": [q[3], q[0], q[1], q[2]],
@@ -184,7 +184,7 @@ class TestNoSnapbackAndTorsionFreeZClamp(unittest.TestCase):
             })
             self.src.get_pose()
 
-            R_yaw = R.from_rotvec([0, math.radians(yaw_deg), 0])
+            R_yaw = R.from_rotvec([-math.radians(yaw_deg), 0, 0])
             q_yaw = R_yaw.as_quat()
             self.server.set_frame({
                 "pos": [0, 0, 0], "quat": [q_yaw[3], q_yaw[0], q_yaw[1], q_yaw[2]],

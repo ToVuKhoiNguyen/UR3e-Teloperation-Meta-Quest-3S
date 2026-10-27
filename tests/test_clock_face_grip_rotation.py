@@ -114,17 +114,17 @@ class TestClockFaceGripRotation(unittest.TestCase):
 
         print(f"\n[Test Clock-face Roll] Input: {rot_deg}° CW -> Base Rotvec: {np.degrees(rotvec_delta)}°")
 
-        # 1. Roll (X_base) must be positive (Clockwise)
-        self.assertGreater(rotvec_delta[0], 0.0, "Roll must rotate clockwise (positive around +X_base)")
-        # 2. Strict Single-Axis Lock: Pitch (Y_base) and Yaw (Z_base) must be exactly 0
-        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=4, msg="Pitch must be 0 (Zero cross-talk)")
-        self.assertAlmostEqual(rotvec_delta[2], 0.0, places=4, msg="Yaw must be 0 (Zero cross-talk)")
+        # 1. Vặn chìa khóa (Clock-face) kích hoạt Kênh 2 quanh trục Z_base
+        self.assertGreater(rotvec_delta[2], 0.0, "Vặn chìa khóa phải xoay Clock-face quanh Z_base")
+        # 2. Strict Single-Axis Lock: Kênh 0 và Kênh 1 phải bằng 0.0
+        self.assertAlmostEqual(rotvec_delta[0], 0.0, places=4, msg="Gập cổ tay phải bằng 0 (Zero cross-talk)")
+        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=4, msg="Uống nước phải bằng 0 (Zero cross-talk)")
 
     def test_02_pitch_flexion_and_extension_direction(self):
         """
         Pitch:
-        Gập cổ tay xuống (Flexion) -> TCP chúc xuống quanh -Y_base (omega_y < 0).
-        Ngửa cổ tay lên (Extension) -> TCP ngửa lên quanh +Y_base (omega_y > 0).
+        Gập cổ tay xuống (Flexion) -> Robot Gập cổ tay chúc xuống (omega[0] < 0).
+        Ngửa cổ tay lên (Extension) -> Robot Gập cổ tay ngửa lên (omega[0] > 0).
         """
         # Engage Grip
         self.server.set_frame({
@@ -157,16 +157,16 @@ class TestClockFaceGripRotation(unittest.TestCase):
         rotvec_down = (R_target_down * R_origin.inv()).as_rotvec()
 
         print(f"\n[Test Pitch Down] Input: +25° Down -> Base Rotvec: {np.degrees(rotvec_down)}°")
-        self.assertLess(rotvec_down[1], 0.0, "Pitch down must produce negative rotation around Y_base")
-        self.assertAlmostEqual(rotvec_down[0], 0.0, places=4, msg="Roll must be 0")
-        self.assertAlmostEqual(rotvec_down[2], 0.0, places=4, msg="Yaw must be 0")
+        self.assertLess(rotvec_down[0], 0.0, "Gập cổ tay phải làm robot gập đầu chúc xuống")
+        self.assertAlmostEqual(rotvec_down[1], 0.0, places=4, msg="Uống nước phải bằng 0")
+        self.assertAlmostEqual(rotvec_down[2], 0.0, places=4, msg="Vặn chìa khóa phải bằng 0")
 
     def test_03_strict_single_axis_dominant_lock_cross_talk_elimination(self):
         """
         Strict Single-Axis Dominant Lock:
-        When human wrist moves with intentional Roll (25 deg) but natural biological leakage:
+        When human wrist moves with intentional Vặn chìa khóa (25 deg) but natural biological leakage:
         Pitch leakage (7 deg) and Yaw leakage (5 deg).
-        -> Only Roll is active, Pitch and Yaw must be STRICTLY 0.0!
+        -> Only Vặn chìa khóa (Kênh 2) is active, Kênh 0 và Kênh 1 must be STRICTLY 0.0!
         """
         self.server.set_frame({
             "pos": [0.1, 0.2, 0.3],
@@ -177,7 +177,7 @@ class TestClockFaceGripRotation(unittest.TestCase):
         })
         self.pose_source.get_pose()
 
-        # Human wrist movement: Roll = 25 deg (trục 0), Yaw = 5 deg (trục 1), Pitch = 7 deg (trục 2)
+        # Human wrist movement: Vặn chìa khóa = 25 deg (trục 0), Uống nước = 5 deg (trục 1), Gập cổ tay = 7 deg (trục 2)
         R_human = R.from_rotvec([-math.radians(25.0), math.radians(5.0), math.radians(7.0)])
         q_h = R_human.as_quat()
 
@@ -198,13 +198,13 @@ class TestClockFaceGripRotation(unittest.TestCase):
         R_origin = R.from_rotvec(self.tcp_home[3:])
         rotvec_delta = (R_target * R_origin.inv()).as_rotvec()
 
-        print(f"\n[Test Strict Lock] Human Multi-axis [Pitch=7°, Yaw=5°, Roll=25°] -> Base Rotvec: {np.degrees(rotvec_delta)}°")
+        print(f"\n[Test Strict Lock] Human Multi-axis [Gập=7°, Uống=5°, Vặn=25°] -> Base Rotvec: {np.degrees(rotvec_delta)}°")
 
-        # Roll is dominant (25 deg > 7 deg > 5 deg) -> Locked to Roll!
-        self.assertGreater(rotvec_delta[0], 0.0, "Roll must be the dominant active axis")
-        # Pitch and Yaw must be strictly 0.0 (within numerical float precision 1e-6)
-        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=6, msg="Pitch cross-talk must be 0.0 rad!")
-        self.assertAlmostEqual(rotvec_delta[2], 0.0, places=6, msg="Yaw cross-talk must be 0.0 rad!")
+        # Vặn chìa khóa is dominant (25 deg > 7 deg > 5 deg) -> Locked to Kênh 2!
+        self.assertGreater(rotvec_delta[2], 0.0, "Vặn chìa khóa (Clock-face) must be the dominant active axis")
+        # Kênh 0 và Kênh 1 must be strictly 0.0 (within numerical float precision 1e-6)
+        self.assertAlmostEqual(rotvec_delta[0], 0.0, places=6, msg="Gập cổ tay cross-talk must be 0.0 rad!")
+        self.assertAlmostEqual(rotvec_delta[1], 0.0, places=6, msg="Uống nước cross-talk must be 0.0 rad!")
 
     def test_04_angular_gain_scaling_45deg_wrist(self):
         """

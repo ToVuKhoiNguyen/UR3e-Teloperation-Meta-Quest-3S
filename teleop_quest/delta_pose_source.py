@@ -788,25 +788,22 @@ class DeltaPoseSource:
             R_delta_local = R_q_anchor.inv() * R_hand_current
             omega_local = R_delta_local.as_rotvec()
 
-            # 2. Ba thành phần giải phẫu cổ tay theo chuẩn WebXR Grip Space:
-            # - Trục X (hoán đổi): Vặn chìa khóa / Xoay mặt đồng hồ (Wrist Roll / Twist).
-            #   (Vặn phải = clockwise -> w_roll = -omega_local[0] > 0)
-            # - Trục Z (hoán đổi): Gập / Ngửa cổ tay lên xuống (Wrist Pitch / Flexion-Extension).
-            #   (Ngửa lên -> w_pitch > 0, Gập xuống -> w_pitch = -omega_local[2] < 0)
-            # - Trục Y (vertical): Lắc cổ tay Trái / Phải (Wrist Yaw / Radial-Ulnar Deviation).
-            #   (WebXR: +Y hướng lên, lắc trái -> +Y => w_yaw = +omega_local[1] > 0 quay trái quanh Z_base)
-            w_roll  = -float(omega_local[0])
-            w_pitch = -float(omega_local[2])
-            w_yaw   =  float(omega_local[1])
+            # 2. Hoán vị vòng tròn 3 trục (3-Axis Cyclic Permutation):
+            # - Kênh 0: Action_GapCoTay    <- nhận từ động tác Gập cổ tay: omega_local[2]
+            # - Kênh 1: Action_UongNuoc     <- nhận từ động tác Uống nước:  omega_local[1]
+            # - Kênh 2: Action_VanChiaKhoa  <- nhận từ động tác Vặn chìa khóa: omega_local[0]
+            act_gap_co_tay    = -float(omega_local[2])
+            act_uong_nuoc     =  float(omega_local[1])
+            act_van_chia_khoa = -float(omega_local[0])
 
             # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
-            # - Kênh 0: Vặn chìa khóa (Tool Roll quanh trục công cụ)
-            # - Kênh 1: Gập/ngửa cổ tay (Body Pitch dọc thân máy)
-            # - Kênh 2: Lắc cổ tay trái/phải (Base Yaw quanh trục Z)
+            # - Kênh 0: Gập/ngửa cổ tay (Action_GapCoTay)
+            # - Kênh 1: Uống nước (Action_UongNuoc)
+            # - Kênh 2: Vặn chìa khóa (Action_VanChiaKhoa / Clock-face)
             omega_gesture = np.array([
-                w_roll,
-                w_pitch,
-                w_yaw
+                act_gap_co_tay,
+                act_uong_nuoc,
+                act_van_chia_khoa
             ], dtype=np.float64)
 
             # 3. Khóa Độc Quyền 1 Trục (Strict Single-Axis Dominant Lock):
@@ -947,7 +944,7 @@ class DeltaPoseSource:
             else:
                 R_target_robot = R_delta_base_single * R_r_anchor
 
-            axis_names = ["VẶN CHÌA KHÓA (Tool Roll)", "UỐNG NƯỚC (Body Pitch)", "QUÉT TRÁI/PHẢI (Yaw)"]
+            axis_names = ["GẬP CỔ TAY (Pitch)", "UỐNG NƯỚC (Tangential)", "VẶN CHÌA KHÓA (Clock-face)"]
             if self._locked_axis_idx is not None and abs(omega_filtered[self._locked_axis_idx]) > 1e-4:
                 deg_rot = np.degrees(abs(omega_scaled[self._locked_axis_idx]))
                 diag_msg = f"XOAY {axis_names[self._locked_axis_idx]} ({deg_rot:.1f}° | Khóa 1 trục)"

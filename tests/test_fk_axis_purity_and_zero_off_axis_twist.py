@@ -119,9 +119,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         max_roll_dev_deg = 0.0
         achieved_yaws = []
 
-        # Rotate hand continuously from 0° up to 70° (well past 35° limit)
+        # Rotate hand continuously from 0° up to 70° (Clock-face axis 0)
         for deg in np.linspace(1, 70, 70):
-            r_hand = R.from_euler('y', deg, degrees=True)
+            r_hand = R.from_euler('x', -deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -206,7 +206,7 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
 
         # Rotate hand to 60° (pushing past limit) and hold to reach steady-state boundary
         for deg in np.linspace(1, 60, 40):
-            r_hand = R.from_euler('y', deg, degrees=True)
+            r_hand = R.from_euler('x', -deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -230,7 +230,7 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         print(f"  Yaw đạt tại biên kịch giới hạn (Hand 60°): {yaw_at_limit_deg:.2f}°")
 
         # Now reverse hand slightly from 60° down to 55°
-        r_rev1 = R.from_euler('y', 55, degrees=True)
+        r_rev1 = R.from_euler('x', -55, degrees=True)
         q_rev1 = r_rev1.as_quat()
         mock_server.get_frame.return_value = {
             "pos": [0.1, 0.2, 0.3],
@@ -249,7 +249,7 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         print(f"  Yaw sau khi nhả tay ngược về 55° (ngay frame đầu tiên): {yaw_rev1_deg:.2f}°")
 
         # Reverse hand further to 50°
-        r_rev2 = R.from_euler('y', 50, degrees=True)
+        r_rev2 = R.from_euler('x', -50, degrees=True)
         q_rev2 = r_rev2.as_quat()
         mock_server.get_frame.return_value = {
             "pos": [0.1, 0.2, 0.3],
@@ -313,9 +313,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         R_orig = R.from_quat([q0_wxyz[1], q0_wxyz[2], q0_wxyz[3], q0_wxyz[0]])
 
         max_off_axis_deg = 0.0
-        # Rotate in negative yaw (quay sang phải)
+        # Rotate in negative yaw (quay sang phải, Clock-face axis 0)
         for deg in np.linspace(-1, -60, 30):
-            r_hand = R.from_euler('y', deg, degrees=True)
+            r_hand = R.from_euler('x', -deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -376,9 +376,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         q_curr = list(self.home_q)
         R_orig = R.from_quat([q0_wxyz[1], q0_wxyz[2], q0_wxyz[3], q0_wxyz[0]])
 
-        # Roll: rotate hand around X (vặn chìa khóa)
+        # 1. Gập cổ tay: rotate hand around Z (Channel 0 -> _clock_u_radial)
         for deg in np.linspace(1, 40, 20):
-            r_hand = R.from_euler('x', -deg, degrees=True)
+            r_hand = R.from_euler('z', -deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -396,10 +396,10 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         u_tool = src._clock_u_radial
         omega_tool = np.dot(omega_roll, u_tool) * u_tool
         e_roll_off_deg = np.degrees(np.linalg.norm(omega_roll - omega_tool))
-        print(f"  Tool Roll achieved: {np.degrees(np.linalg.norm(omega_tool)):.2f}°, Off-Axis: {e_roll_off_deg:.3f}°")
+        print(f"  Radial Gập cổ tay achieved: {np.degrees(np.linalg.norm(omega_tool)):.2f}°, Off-Axis: {e_roll_off_deg:.3f}°")
         self.assertLessEqual(e_roll_off_deg, 1.50)
 
-        # 2. Pitch Test
+        # 2. Uống nước: rotate hand around Y (Channel 1 -> _clock_u_tangential)
         src.reset_anchor()
         self.teleop.sync_with_robot(self.home_q)
         mock_server.get_frame.return_value = {
@@ -411,9 +411,8 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         self.teleop.step(self.home_q)
         q_curr = list(self.home_q)
 
-        # Pitch: rotate hand around Z (gập/ngửa cổ tay)
         for deg in np.linspace(1, 35, 20):
-            r_hand = R.from_euler('z', deg, degrees=True)
+            r_hand = R.from_euler('y', deg, degrees=True)
             q_h = r_hand.as_quat()
             mock_server.get_frame.return_value = {
                 "pos": [0.1, 0.2, 0.3],
@@ -431,9 +430,9 @@ class TestFKAxisPurityAndZeroOffAxisTwist(unittest.TestCase):
         u_pitch = src._clock_u_tangential
         omega_p = np.dot(omega_pitch, u_pitch) * u_pitch
         e_pitch_off_deg = np.degrees(np.linalg.norm(omega_pitch - omega_p))
-        print(f"  Body Pitch achieved: {np.degrees(np.linalg.norm(omega_p)):.2f}°, Off-Axis: {e_pitch_off_deg:.3f}°")
+        print(f"  Tangential Uống nước achieved: {np.degrees(np.linalg.norm(omega_p)):.2f}°, Off-Axis: {e_pitch_off_deg:.3f}°")
         self.assertLessEqual(e_pitch_off_deg, 1.50)
-        print("  -> PASS: Cả 3 trục Roll, Pitch, Yaw đều thỏa mãn tiêu chuẩn độ tinh khiết (e_off_axis <= 1.5°).")
+        print("  -> PASS: Cả 3 trục Gập cổ tay, Uống nước, Vặn chìa khóa đều thỏa mãn tiêu chuẩn độ tinh khiết (e_off_axis <= 1.5°).")
 
 
 if __name__ == "__main__":
