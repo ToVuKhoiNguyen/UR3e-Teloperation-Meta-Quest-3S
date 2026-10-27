@@ -789,12 +789,12 @@ class DeltaPoseSource:
             omega_local = R_delta_local.as_rotvec()
 
             # 2. Hoán vị vòng tròn 3 trục (3-Axis Cyclic Permutation):
-            # - Kênh 0: Action_GapCoTay    <- nhận từ động tác Gập cổ tay: omega_local[2]
-            # - Kênh 1: Action_UongNuoc     <- nhận từ động tác Uống nước:  omega_local[1]
-            # - Kênh 2: Action_VanChiaKhoa  <- nhận từ động tác Vặn chìa khóa: omega_local[0]
-            act_gap_co_tay    = -float(omega_local[2])
-            act_uong_nuoc     =  float(omega_local[1])
-            act_van_chia_khoa = -float(omega_local[0])
+            # - Kênh 0: Action_GapCoTay    <- nhận từ động tác Gập cổ tay: omega_local[0]
+            # - Kênh 1: Action_UongNuoc     <- nhận từ động tác Uống nước:  omega_local[2]
+            # - Kênh 2: Action_VanChiaKhoa  <- nhận từ động tác Vặn chìa khóa: omega_local[1]
+            act_gap_co_tay    = -float(omega_local[0])
+            act_uong_nuoc     = -float(omega_local[2])
+            act_van_chia_khoa =  float(omega_local[1])
 
             # Ánh xạ sang hệ quy chiếu cử chỉ của người dùng:
             # - Kênh 0: Gập/ngửa cổ tay (Action_GapCoTay)
