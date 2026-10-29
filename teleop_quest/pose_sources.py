@@ -201,5 +201,5 @@ def get_robot_fk_as_ur(teleop, ctrl):
     fk_dict = teleop._solver.fk(q_real)
     pos = fk_dict["pos"]
     quat_wxyz = fk_dict["quat"]
-    axis, angle = transforms3d.quaternions.quat2axangle(quat_wxyz)
-    return [pos[0], pos[1], pos[2], axis[0]*angle, axis[1]*angle, axis[2]*angle]
+    # Trả về trực tiếp 7 phần tử [x, y, z, qw, qx, qy, qz] bảo toàn độ chính xác quaternion tuyệt đối
+    return [pos[0], pos[1], pos[2], quat_wxyz[0], quat_wxyz[1], quat_wxyz[2], quat_wxyz[3]]

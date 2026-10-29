@@ -4,81 +4,101 @@ import os
 import shutil
 import subprocess
 
+import threading
+import time
+
+_adb_watcher_thread = None
+
 def setup_adb_reverse(ports=(8443, 8444, 8445, 8080)):
     """
-    Tự động kiểm tra kính Meta Quest qua ADB và cấu hình reverse port forwarding.
-    Khắc phục triệt để lỗi 'This site can't be reached' khi truy cập https://localhost:8443 trên kính.
+    Khởi động luồng 'Auto-Heal ADB USB' chạy ngầm liên tục (daemon=True) lặp lại mỗi 2.5 giây.
+    Khắc phục triệt để lỗi 'This site can't be reached' kể cả khi người dùng cấp quyền muộn hoặc tuột cáp cắm lại.
     """
-    adb_bin = shutil.which("adb")
-    if not adb_bin:
-        print("[ADB] Lưu ý: 'adb' chưa được cài đặt trên hệ thống (sudo apt install -y adb). Bỏ qua ADB reverse.")
-        return False
+    global _adb_watcher_thread
+    if _adb_watcher_thread is not None and _adb_watcher_thread.is_alive():
+        return _adb_watcher_thread
 
-    try:
-        # Khởi động adb server nếu chưa chạy
-        subprocess.run([adb_bin, "start-server"], capture_output=True, timeout=3)
+    def _adb_worker():
+        adb_bin = shutil.which("adb")
+        if not adb_bin:
+            return
 
-        # Kiểm tra danh sách thiết bị
-        res = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, timeout=3)
-        lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+        is_reversed = False
+        last_warn_t = 0.0
 
-        # Bỏ qua dòng tiêu đề "List of devices attached" và các dòng thông báo daemon
-        device_lines = [l for l in lines if not l.startswith("List of devices") and not l.startswith("*")]
+        # Khởi động adb daemon nếu chưa chạy
+        try:
+            subprocess.run([adb_bin, "start-server"], capture_output=True, timeout=3)
+        except Exception:
+            pass
 
-        authorized_devices = []
-        unauthorized_devices = []
+        while True:
+            try:
+                # 1. Chạy adb start-server (ẩn output lỗi nếu có)
+                subprocess.run([adb_bin, "start-server"], capture_output=True, timeout=3)
 
-        for dl in device_lines:
-            parts = dl.split()
-            if len(parts) >= 2:
-                serial, state = parts[0], parts[1]
-                if state == "device":
-                    authorized_devices.append(serial)
-                elif state == "unauthorized":
-                    unauthorized_devices.append(serial)
+                # 2. Đọc kết quả lệnh adb devices
+                res = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, timeout=4)
+                lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+                device_lines = [l for l in lines if not l.startswith("List of devices") and not l.startswith("*")]
 
-        if unauthorized_devices:
-            print("\n" + "!" * 65)
-            print(f"[ADB CẢNH BÁO] Phát hiện kính Quest ({', '.join(unauthorized_devices)}) nhưng CHƯA CẤP QUYỀN (unauthorized)!")
-            print("-> Hãy đeo kính Meta Quest lên mắt.")
-            print("-> Chọn 'Always allow from this computer' và bấm 'Allow' (Cho phép) trên kính!")
-            print("!" * 65 + "\n")
-            return False
+                has_unauth = any("unauthorized" in dl for dl in device_lines)
+                authorized_devices = []
+                for dl in device_lines:
+                    parts = dl.split()
+                    if len(parts) >= 2 and parts[1] == "device":
+                        authorized_devices.append(parts[0])
 
-        if not authorized_devices:
-            print("[ADB] Không phát hiện kính Quest cắm cáp USB (chế độ Wi-Fi hoặc chưa cắm cáp).")
-            return False
+                # Trường hợp 1 (Chưa cắm cáp): Nếu danh sách trống -> đặt cờ is_reversed = False, im lặng đợi vòng lặp tiếp theo
+                if not device_lines or (not has_unauth and not authorized_devices):
+                    is_reversed = False
 
-        # Thực thi reverse port forwarding cho từng cổng
-        success_ports = []
-        failed_ports = []
-        for port in ports:
-            rev_res = subprocess.run(
-                [adb_bin, "reverse", f"tcp:{port}", f"tcp:{port}"],
-                capture_output=True,
-                text=True,
-                timeout=3
-            )
-            if rev_res.returncode == 0:
-                success_ports.append(port)
-            else:
-                failed_ports.append(port)
+                # Trường hợp 2 (Chưa cấp quyền trên máy mới - unauthorized):
+                elif has_unauth:
+                    is_reversed = False
+                    now = time.time()
+                    if now - last_warn_t >= 5.0:
+                        print("\n\033[93;1m⚠️  [QUEST USB] Phát hiện kính Quest nhưng CHƯA CẤP QUYỀN! Hãy đeo kính lên và bấm 'Allow USB Debugging' (Cho phép gỡ lỗi USB)!\033[0m")
+                        print("\033[93m   -> Mẹo: Tích vào 'Always allow from this computer' và bấm 'Allow' trên màn hình kính!\033[0m\n")
+                        last_warn_t = now
 
-        if success_ports:
-            print("\n" + "=" * 65)
-            print("[ADB USB] ĐÃ TỰ ĐỘNG THIẾT LẬP REVERSE PORT FORWARDING THÀNH CÔNG!")
-            print(f"-> Thiết bị: {', '.join(authorized_devices)}")
-            print(f"-> Các cổng đã forward: {', '.join(str(p) for p in success_ports)}")
-            print("-> Hãy mở Meta Quest Browser trên kính và truy cập: https://localhost:8443")
-            print("=" * 65 + "\n")
-            return True
-        else:
-            print(f"[ADB] Lỗi khi forward các cổng: {failed_ports}")
-            return False
+                # Trường hợp 3 (Đã kết nối - <serial>\tdevice):
+                elif authorized_devices:
+                    target_serial = authorized_devices[0]
+                    # Kiểm tra lệnh adb reverse --list
+                    res_rev = subprocess.run([adb_bin, "-s", target_serial, "reverse", "--list"], capture_output=True, text=True, timeout=4)
+                    rev_out = res_rev.stdout
 
-    except Exception as e:
-        print(f"[ADB] Lỗi trong quá trình kiểm tra/cấu hình ADB: {e}")
-        return False
+                    need_reverse = (not is_reversed) or any(f"tcp:{p}" not in rev_out for p in ports)
+
+                    if need_reverse:
+                        success = True
+                        for p in ports:
+                            r = subprocess.run([adb_bin, "-s", target_serial, "reverse", f"tcp:{p}", f"tcp:{p}"], capture_output=True, text=True, timeout=4)
+                            if r.returncode != 0:
+                                success = False
+
+                        if success:
+                            is_reversed = True
+                            try:
+                                from teleop_quest.network_utils import get_local_ip
+                                local_ip = get_local_ip()
+                            except Exception:
+                                local_ip = "127.0.0.1"
+
+                            print("\n\033[92;1m" + "=" * 70 + "\033[0m")
+                            print(f"\033[92;1m✅ [QUEST USB] Đã kết nối cáp USB thành công! Mở trình duyệt trên Quest và vào ngay: https://localhost:8443 (hoặc qua Wi-Fi: https://{local_ip}:8443)\033[0m")
+                            print("   👉 3D Viser Dashboard: http://localhost:8080")
+                            print("\033[92;1m" + "=" * 70 + "\033[0m\n")
+
+            except Exception:
+                pass
+
+            time.sleep(2.5)
+
+    _adb_watcher_thread = threading.Thread(target=_adb_worker, daemon=True, name="AutoHealADBWatcher")
+    _adb_watcher_thread.start()
+    return _adb_watcher_thread
 
 if __name__ == "__main__":
     # Ensure the workspace root is in PYTHONPATH

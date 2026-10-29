@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any, List
 import numpy as np
 import torch
 
-from core.pyroki_ursim_control import PyrokiURSim
+from core.pyroki_ursim_control import PyrokiURSim, StandbyRobotController
 from core.selectable_recorder import SelectableDataRecorder
 from teleop.pyroki_solver import UR3E_LIMITS
 from teleop.teleoperation import (
@@ -301,9 +301,9 @@ def register_ui_callbacks(
 def parse_args():
     parser = argparse.ArgumentParser(description="UR3e WebXR Teleoperation")
     parser.add_argument("--robot", type=str, choices=["real", "sim"], default=None, help="Robot mode: real (UR3e hardware) or sim (URSim simulation)")
-    parser.add_argument("--robot-ip", type=str, default=os.environ.get("ROBOT_IP", "127.0.0.1"), help="UR3e robot IP address (default: 127.0.0.1 for URSim)")
+    parser.add_argument("--robot-ip", type=str, default=None, help="UR3e robot IP address (default: 127.0.0.1 for URSim)")
     parser.add_argument("--camera", type=str, choices=["synthetic", "real", "realsense", "d455", "d435"], default="synthetic", help="Camera source: synthetic, real or realsense (D455/D435)")
-    parser.add_argument("--cam-source", type=str, choices=["usb", "eth"], default="usb", help="Camera connection method: usb or eth")
+    parser.add_argument("--cam-source", type=str, choices=["usb", "eth", "ws", "websocket"], default="usb", help="Camera connection method: usb, eth, or ws")
     parser.add_argument("--cam-url", type=str, default=os.environ.get("CAM_URL", "tcp://192.168.1.100:5555"), help="Camera Ethernet URL (e.g. tcp://192.168.1.100:5555)")
     parser.add_argument("--camera-device", type=int, default=0, help="Device ID for OpenCV camera (default: 0)")
     parser.add_argument("--camera-serial", type=str, default=None, help="RealSense camera serial number (default: auto-detect)")
@@ -313,6 +313,18 @@ def parse_args():
     if args.auto:
         args.robot = "real"
         args.robot_ip = "auto"
+
+    if args.robot is None:
+        env_mode = os.environ.get("ROBOT_MODE", "").strip().lower()
+        if env_mode in ("sim", "real"):
+            args.robot = env_mode
+
+    # Nếu chỉ định rõ --robot sim mà không gõ --robot-ip, luôn ưu tiên 127.0.0.1
+    if args.robot == "sim" and args.robot_ip is None:
+        args.robot_ip = "127.0.0.1"
+    elif args.robot_ip is None:
+        args.robot_ip = os.environ.get("ROBOT_IP", "127.0.0.1")
+
     return args
 
 class TelemetryUIWorker:
@@ -446,7 +458,59 @@ def main():
         os.environ["DISABLE_SELF_COLLISION"] = "1"
         print("[Safety] Flag --disable-self-collision active: Self-collision check DISABLED!")
 
+    # Auto-Detect thông minh giữa Robot thật và URSim:
+    # Nếu IP hiện tại trỏ tới một địa chỉ ngoài và không tìm thấy, tự động kiểm tra URSim tại 127.0.0.1
     is_real_robot = (args.robot == "real") or (args.robot is None and args.robot_ip not in ("127.0.0.1", "localhost", "192.168.56.101"))
+
+    # Kiểm tra mạng Robot thật (Ping, RTDE 30004, Secondary 30002, Dashboard 29999)
+    if is_real_robot and args.robot_ip not in ("auto", "dhcp", "DHCP", "127.0.0.1", "localhost"):
+        def _quick_probe(ip, port, timeout=0.8):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(timeout)
+                s.connect((ip, port))
+                s.close()
+                return True
+            except Exception:
+                return False
+
+        ping_ok = subprocess.run(["ping", "-c", "1", "-W", "1", args.robot_ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        p_rtde = _quick_probe(args.robot_ip, 30004)
+        p_sec = _quick_probe(args.robot_ip, 30002)
+        p_dash = _quick_probe(args.robot_ip, 29999)
+
+        print("\n" + "=" * 68)
+        print(f"  📡 KIỂM TRA ĐƯỜNG TRUYỀN MẠNG ROBOT ({args.robot_ip})")
+        print("=" * 68)
+        print(f"  [+] Ping ICMP ({args.robot_ip}):           {'✅ THÀNH CÔNG' if ping_ok else '❌ KHÔNG PHẢN HỒI (Ping timeout)'}")
+        print(f"  [+] Cổng RTDE 30004 (Điều khiển 125Hz):  {'✅ ĐÃ MỞ (Sẵn sàng)' if p_rtde else '❌ ĐÓNG / BỊ CHẶN'}")
+        print(f"  [+] Cổng Secondary 30002 (URScript):     {'✅ ĐÃ MỞ (Sẵn sàng)' if p_sec else '❌ ĐÓNG / BỊ CHẶN'}")
+        print(f"  [+] Cổng Dashboard 29999 (PolyScope):    {'✅ ĐÃ MỞ (Sẵn sàng)' if p_dash else '❌ ĐÓNG / BỊ CHẶN'}")
+
+        if not (ping_ok or p_rtde or p_sec or p_dash):
+            # Kiểm tra card mạng máy tính có dải IP tương ứng không (vd: 10.42.0.x)
+            try:
+                ip_prefix = ".".join(args.robot_ip.split(".")[:3])
+                ip_out = subprocess.check_output(["ip", "-4", "addr", "show"], stderr=subprocess.DEVNULL).decode()
+                has_matching_subnet = ip_prefix in ip_out
+                if not has_matching_subnet:
+                    print("\n  ⚠️  CHẨN ĐOÁN NGUYÊN NHÂN MẤT KẾT NỐI:")
+                    print(f"     Card mạng máy tính CHƯA CÓ IP cùng dải mạng '{ip_prefix}.x' với Robot!")
+                    print(f"     👉 Hãy gán IP tĩnh cho card mạng Ethernet trên máy tính (ví dụ: {ip_prefix}.1):")
+                    print(f"        sudo ip addr add {ip_prefix}.1/24 dev <tên_card_mạng_ethernet>")
+                    print("        (Hoặc vào Settings -> Network -> Wired -> IPv4: chọn Manual, gán IP tương ứng).")
+            except Exception:
+                pass
+
+        if not (p_rtde or p_sec or p_dash) and args.robot != "real":
+            # Nếu người dùng không chỉ định cứng 'real', tự động kiểm tra xem có URSim local không
+            if _quick_probe("127.0.0.1", 30004, timeout=0.3) or _quick_probe("127.0.0.1", 29999, timeout=0.3):
+                print(f"  [Auto-Detect] Phát hiện URSim đang chạy tại 127.0.0.1! Tự động chuyển sang URSim.")
+                args.robot_ip = "127.0.0.1"
+                os.environ["ROBOT_IP"] = "127.0.0.1"
+                args.robot = "sim"
+                is_real_robot = False
+        print("=" * 68 + "\n")
 
     # Auto-discover UR3e IP via DHCP if auto mode selected
     if is_real_robot and (args.robot_ip in ("auto", "dhcp", "DHCP") or (args.robot == "real" and args.robot_ip in ("127.0.0.1", "localhost"))):
@@ -481,19 +545,50 @@ def main():
 
     # 3. Start Robot Controller, SafetyGate & Data Logger
     print(f"[System] Connecting PyRoki (CPU JIT) and UR3e at IP: {args.robot_ip}...")
-    ctrl = PyrokiURSim(scene_file=SCENE_CONFIG, robot_ip=args.robot_ip, is_real=is_real_robot)
+    ctrl = None
+    is_standby = False
+    try:
+        ctrl = PyrokiURSim(scene_file=SCENE_CONFIG, robot_ip=args.robot_ip, is_real=is_real_robot)
+    except Exception as e:
+        # Nếu cấu hình trỏ tới IP khác và lỗi, chỉ thử fallback sang URSim nếu người dùng KHÔNG chỉ định cứng robot real
+        if args.robot_ip not in ("127.0.0.1", "localhost") and args.robot != "real":
+            try:
+                print(f"[Auto-Detect Fallback] Robot {args.robot_ip} lỗi ({e}). Đang thử kết nối URSim tại 127.0.0.1...")
+                ensure_ursim_container("127.0.0.1")
+                ctrl = PyrokiURSim(scene_file=SCENE_CONFIG, robot_ip="127.0.0.1", is_real=False)
+                args.robot_ip = "127.0.0.1"
+                os.environ["ROBOT_IP"] = "127.0.0.1"
+                is_real_robot = False
+                print(f"[Auto-Detect Fallback] ✅ Kết nối URSim 127.0.0.1 THÀNH CÔNG!")
+            except Exception:
+                ctrl = None
+        if ctrl is None:
+            print("\n" + "\033[93m" + "!" * 72 + "\033[0m")
+            print(f"\033[91;1m[LỖI KẾT NỐI PHẦN CỨNG] Chưa thể kết nối tới Robot tại {args.robot_ip} ({e}).\033[0m")
+            print("\033[96m-> HỆ THỐNG TỰ ĐỘNG CHUYỂN SANG CHẾ ĐỘ STANDBY / PREVIEW:\033[0m")
+            print("   - Giao diện 3D Viser Dashboard và WebXR Cockpit VẪN MỞ BÌNH THƯỜNG.")
+            print("   - Bạn vẫn có thể trải nghiệm giao diện WebXR và kiểm thử camera.")
+            print(f"   - Để điều khiển cánh tay robot thật: Hãy đảm bảo cáp Ethernet cắm chắc, PC có IP tĩnh cùng dải 10.42.0.x và PolyScope ở chế độ RUNNING.")
+            print("\033[93m" + "!" * 72 + "\033[0m\n")
+            ctrl = StandbyRobotController(scene_file=SCENE_CONFIG)
+            is_standby = True
+
     actual_q = None
-    for _ in range(50):
-        try:
-            q_read = ctrl.joints()
-            if q_read is not None and len(q_read) == 6:
-                q_arr = np.array(q_read, dtype=float)
-                if np.linalg.norm(q_arr) > 0.01:
-                    actual_q = q_arr
-                    break
-        except Exception:
-            pass
-        time.sleep(0.1)
+    if not is_standby:
+        for _ in range(50):
+            try:
+                q_read = ctrl.joints()
+                if q_read is not None and len(q_read) == 6:
+                    q_arr = np.array(q_read, dtype=float)
+                    if np.linalg.norm(q_arr) > 0.01:
+                        actual_q = q_arr
+                        break
+            except Exception:
+                pass
+            time.sleep(0.1)
+    else:
+        actual_q = np.array(ctrl.joints(), dtype=float)
+
 
     if actual_q is None:
         print("[Warning] Robot joint reading timeout or all zeros, using SAFE_HOME_JOINTS fallback.")
@@ -572,7 +667,27 @@ def main():
     # 6. Setup VR PoseSource and Teleop Pipeline
     widget_pose_source = WidgetPoseSource(ui.target_widget)
     widget_pose_source.sync_with_robot(pos=robot_init_pos, quat=robot_init_quat)
-    executor = ServoJExecutor(dt=POLL_SLEEP, lookahead_time=0.11, gain=250, robot_ip=args.robot_ip)
+    if is_standby:
+        class DummyExecutor:
+            """Bộ thực thi giả lập động học (Kinematic Mock) khi không có robot thật hoặc URSim."""
+            def __init__(self, mock_ctrl):
+                self.ctrl = mock_ctrl
+                self.ROBOT_IP = "127.0.0.1"
+            def connect(self):
+                print("[DummyExecutor] Chế độ Mô phỏng Động học nội bộ (Kinematic Simulation) đã sẵn sàng!")
+            def disconnect(self):
+                pass
+            def send(self, q):
+                if self.ctrl and hasattr(self.ctrl, "servo_j"):
+                    self.ctrl.servo_j(q)
+            def stop(self, a=10.0):
+                pass
+        executor = DummyExecutor(ctrl)
+    else:
+        executor = ServoJExecutor(dt=POLL_SLEEP, lookahead_time=0.11, gain=250, robot_ip=args.robot_ip)
+        # Khởi tạo kết nối ServoJ chạy nền trước để kéo Gizmo phản hồi tức thì
+        threading.Thread(target=executor.connect, daemon=True).start()
+
     teleop = TeleoperationController(
         pose_source=widget_pose_source,
         pyroki_solver=pyroki_solver,
@@ -580,7 +695,11 @@ def main():
         executor=executor
     )
     teleop.sync_with_robot(start_joints)
-    ui.set_status("OK")
+    if is_standby:
+        ui.set_status("[STANDBY] ROBOT NOT CONNECTED")
+    else:
+        ui.set_status("OK")
+
 
     pose_source = DeltaPoseSource(
         quest_server, ctrl, scale=1.0,
@@ -662,6 +781,7 @@ def main():
     _btn_b_prev = False
     _btn_b_press_start = 0.0
     _btn_b_long_fired = False
+    _btn_b_last_pulse_t = 0.0
 
     _btn_a_prev = False
     _btn_a_press_start = 0.0
@@ -723,6 +843,8 @@ def main():
             _last_grip_state = False
             _btn_a_prev = False
             _btn_b_prev = False
+            _btn_b_long_fired = False
+            _btn_b_last_pulse_t = 0.0
             _btn_x_prev = False
             _thumbstick_click_prev = False
             if q_real is not None:
@@ -809,16 +931,28 @@ def main():
 
         now_t = time.perf_counter()
 
-        # B1. Handle Button B (Short press: Toggle Teleop | Long press >= 3s: Go Home)
+        # B1. Handle Button B (Short press: Toggle Teleop | Long press >= 3s: Go Home / Reset)
         if _is_btn_b and not _btn_b_prev:
             _btn_b_press_start = now_t
             _btn_b_long_fired = False
+            _btn_b_last_pulse_t = now_t
+            # Rung nhẹ báo hiệu bắt đầu chu trình giữ nút B (0.0s)
+            quest_server.send_haptic(intensity=0.3, duration=50)
         elif _is_btn_b:
-            if not _btn_b_long_fired and (now_t - _btn_b_press_start) >= 3.0:
-                _btn_b_long_fired = True
-                print("[VR Button B] Hold >= 3.0s -> Triggering safe Go Home immediately!")
-                quest_server.send_haptic(intensity=1.0, duration=300)
-                trigger_go_home(source_name="VR Button B (Hold >= 3.0s)")
+            if not _btn_b_long_fired:
+                hold_dur = now_t - _btn_b_press_start
+                if hold_dur >= 3.0:
+                    _btn_b_long_fired = True
+                    print("[VR Button B] Hold >= 3.0s -> Triggering safe Go Home immediately!")
+                    # Rung mạnh xác nhận thực thi thành công Reset to Home (3s)
+                    quest_server.send_haptic(intensity=1.0, duration=400)
+                    trigger_go_home(source_name="VR Button B (Hold >= 3.0s)")
+                else:
+                    # Rung nhịp đều đặn trong suốt quá trình đếm ngược 3s (mỗi 0.6s phát một xung rung tăng dần)
+                    if (now_t - _btn_b_last_pulse_t) >= 0.6:
+                        _btn_b_last_pulse_t = now_t
+                        haptic_intensity = min(0.35 + (hold_dur / 3.0) * 0.45, 0.85)
+                        quest_server.send_haptic(intensity=haptic_intensity, duration=60)
         elif _btn_b_prev and not _is_btn_b:
             if not _btn_b_long_fired:
                 duration_s = now_t - _btn_b_press_start
@@ -829,6 +963,7 @@ def main():
                 state_str = "ENABLED" if new_teleop_state else "DISABLED"
                 print(f"[VR Button B] Click ({duration_s:.2f}s < 3.0s) -> Teleop state: {state_str}")
                 quest_server.send_haptic(intensity=0.7, duration=150)
+            _btn_b_long_fired = False
         _btn_b_prev = _is_btn_b
 
         # B2. Handle Button A (Short press: Toggle Record | Long press >= 2s: Discard Episode)
@@ -929,9 +1064,9 @@ def main():
             fk_res = None
 
         # G. Handle haptic feedback and safe stopping for Trigger & Grip
-        # Rising edge (0 -> 1): Tactile click confirming control start
-        if not _last_trig_state and _is_trig:
-            quest_server.send_haptic(intensity=0.35, duration=40)
+        # Rising edge (0 -> 1): Tắt hoàn toàn phản hồi rung khi bóp/giữ Trigger theo yêu cầu
+        # if not _last_trig_state and _is_trig:
+        #     quest_server.send_haptic(intensity=0.35, duration=40)
 
         # Falling edge (1 -> 0): Trigger released
         # Chốt vị trí cuối cùng trên Viser Gizmo và giữ robot đứng yên êm dịu mà không gọi servoStop
@@ -951,9 +1086,9 @@ def main():
             print(f"[Teleop] Trigger released -> Control handed over to Viser Gizmo (motor velocity = {motor_vel:.4f} rad/s)")
         _last_trig_state = _is_trig
 
-        # Rising edge (0 -> 1) for Grip: Tactile click confirming rotation start
-        if not _last_grip_state and _is_grip:
-            quest_server.send_haptic(intensity=0.35, duration=40)
+        # Rising edge (0 -> 1) for Grip: Tắt hoàn toàn phản hồi rung khi bóp/giữ Grip theo yêu cầu
+        # if not _last_grip_state and _is_grip:
+        #     quest_server.send_haptic(intensity=0.35, duration=40)
 
         # Same for Grip release
         if _last_grip_state and not _is_grip:
@@ -992,6 +1127,18 @@ def main():
 
         # Auto-enable Teleoperation when user interacts with Cockpit Joint Position
         if quest_server.is_cockpit_jogging():
+            if not teleop.enabled:
+                ui.cb_teleop.value = True
+                teleop.enabled = True
+                _last_teleop_state = True
+                quest_server.set_drive_mode(True)
+                _last_quest_drive_mode = True
+                executor.connect()
+                if ctrl is not None and hasattr(ctrl, "joints"):
+                    teleop._last_valid_q = list(ctrl.joints())
+
+        # Auto-enable Teleoperation when user interacts with Viser 3D Gizmo
+        if (time.time() - gizmo_interaction[0]) < 0.35:
             if not teleop.enabled:
                 ui.cb_teleop.value = True
                 teleop.enabled = True
@@ -1053,6 +1200,9 @@ def main():
                     profiler.start_segment("IK_Solver")
                     teleop.step(q_real, pose=target_pose)
                     profiler.end_segment("IK_Solver")
+                    if is_standby and hasattr(teleop, "_last_valid_q") and teleop._last_valid_q is not None:
+                        ctrl.servo_j(teleop._last_valid_q)
+
                     current_status = teleop.get_status()
                     status_low = current_status.lower()
                     current_status_display = current_status
@@ -1211,9 +1361,10 @@ def main():
         target_loop_time += POLL_SLEEP
         now_cadence = time.perf_counter()
         sleep_duration = target_loop_time - now_cadence
-        if sleep_duration > 0.0005:
+        if sleep_duration > 0.001:
             time.sleep(sleep_duration)
-        elif sleep_duration < -POLL_SLEEP:
+        else:
+            time.sleep(0.002)  # Nhường CPU cho các luồng phụ
             target_loop_time = now_cadence
 
 if __name__ == "__main__":

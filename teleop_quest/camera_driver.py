@@ -578,9 +578,11 @@ class EthernetWristCamera(BaseWristCamera):
         self._thread.start()
 
     def _capture_worker(self):
-        """Worker thread chọn ZMQ SUB nếu url là tcp://, ngược lại dùng OpenCV stream"""
+        """Worker thread chọn ZMQ SUB nếu url là tcp://, WebSocket nếu ws://, ngược lại dùng OpenCV stream"""
         if self.url.startswith("tcp://"):
             self._run_zmq_receiver()
+        elif self.url.startswith("ws://") or self.url.startswith("wss://"):
+            self._run_ws_receiver()
         else:
             self._run_opencv_receiver()
 
@@ -726,11 +728,104 @@ class EthernetWristCamera(BaseWristCamera):
                     except Exception:
                         pass
 
+    def _run_ws_receiver(self):
+        """Nhận luồng hình ảnh thời gian thực qua WebSocket chuẩn (RFC 6455)"""
+        import struct
+        try:
+            from websockets.sync.client import connect
+        except ImportError:
+            print("[WebSocketCam] Cảnh báo: Chưa cài đặt thư viện 'websockets'. Hãy chạy: pip install websockets")
+            with self._lock:
+                self._is_connected = False
+                self._device_name = "WebSocket Cam (Thiếu websockets)"
+            while self._running:
+                time.sleep(2.0)
+            return
+
+        frame_count = 0
+        fps_start = time.perf_counter()
+
+        while self._running:
+            try:
+                print(f"[WebSocketCam] Đang kết nối tới WebSocket Server: {self.url}...")
+                with connect(self.url, open_timeout=3.0, close_timeout=1.0) as ws:
+                    print(f"[WebSocketCam] ĐÃ KẾT NỐI WebSocket Server: {self.url}")
+                    with self._lock:
+                        self._is_connected = True
+                        self._device_name = f"WebSocket Cam ({self.url})"
+
+                    while self._running:
+                        try:
+                            msg = ws.recv(timeout=1.5)
+                        except TimeoutError:
+                            continue
+
+                        if not isinstance(msg, (bytes, bytearray)) or len(msg) < 4:
+                            continue
+
+                        # Tách gói tin [4B len_rgb][4B len_depth][rgb_bytes][depth_bytes] hoặc pure JPEG
+                        if msg.startswith(b"\xff\xd8\xff"):
+                            jpg_bytes = msg
+                            depth_bytes = b""
+                        elif len(msg) >= 8:
+                            len_rgb, len_depth = struct.unpack("!II", msg[:8])
+                            if len(msg) >= 8 + len_rgb + len_depth:
+                                jpg_bytes = msg[8 : 8 + len_rgb]
+                                depth_bytes = msg[8 + len_rgb : 8 + len_rgb + len_depth]
+                            else:
+                                jpg_bytes = msg
+                                depth_bytes = b""
+                        else:
+                            jpg_bytes = msg
+                            depth_bytes = b""
+
+                        # Giải mã RGB
+                        np_arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
+                        frame_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                        if frame_bgr is None:
+                            continue
+                        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+                        # Giải mã Depth nếu có
+                        depth_frame = None
+                        depth_raw = None
+                        if len(depth_bytes) > 0:
+                            if len(depth_bytes) == self.width * self.height * 2:
+                                depth_raw = np.frombuffer(depth_bytes, dtype=np.uint16).reshape((self.height, self.width))
+                                depth_norm = cv2.normalize(depth_raw, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                                depth_frame = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+                            else:
+                                d_arr = np.frombuffer(depth_bytes, dtype=np.uint8)
+                                depth_frame = cv2.imdecode(d_arr, cv2.IMREAD_COLOR)
+
+                        if frame_rgb.shape[1] != self.width or frame_rgb.shape[0] != self.height:
+                            frame_rgb = cv2.resize(frame_rgb, (self.width, self.height))
+
+                        frame_count += 1
+                        now = time.perf_counter()
+                        if now - fps_start >= 1.0:
+                            self._fps_actual = frame_count / (now - fps_start)
+                            frame_count = 0
+                            fps_start = now
+
+                        with self._lock:
+                            self._latest_rgb = frame_rgb
+                            self._latest_depth = depth_frame
+                            self._latest_depth_raw = depth_raw
+                            self._is_connected = True
+                            self._device_name = f"WebSocket Cam ({self.url})"
+
+            except Exception:
+                with self._lock:
+                    self._is_connected = False
+                time.sleep(1.0)
+
     def _create_placeholder(self, stream_mode: str) -> np.ndarray:
         """Tạo ảnh placeholder thông báo trực quan khi chưa nhận được luồng qua mạng"""
         box = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         box[:] = (18, 22, 28)
-        cv2.putText(box, "ETHERNET CAMERA WAITING...", (20, self.height // 2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (50, 200, 255), 2)
+        title = "WEBSOCKET CAMERA WAITING..." if self.url.startswith(("ws://", "wss://")) else "ETHERNET CAMERA WAITING..."
+        cv2.putText(box, title, (20, self.height // 2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (50, 200, 255), 2)
         cv2.putText(box, f"Connecting: {self.url}", (20, self.height // 2 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
         if stream_mode == "side_by_side":
             b_depth = np.zeros((self.height, self.width, 3), dtype=np.uint8)
@@ -797,9 +892,13 @@ def create_wrist_camera(
       + camera_type == 'real': Ưu tiên kiểm tra RealSense nếu có thiết bị cắm sẵn, nếu không sẽ dùng OpenCV V4L2.
       + camera_type == 'synthetic': Sử dụng Camera ảo mô phỏng 3D Eye-in-Hand.
     """
-    # ── Phân nhánh 1: Kết nối qua mạng Ethernet ─────────────────────────────
-    if cam_source == "eth" or camera_type.lower() in ("eth", "ethernet"):
-        print(f"[Hệ thống] Khởi tạo Camera qua mạng Ethernet (Endpoint: {cam_url})")
+    # ── Phân nhánh 1: Kết nối qua mạng Ethernet / WebSocket ───────────────────
+    if (
+        cam_source in ("eth", "ws", "websocket")
+        or camera_type.lower() in ("eth", "ethernet", "ws", "websocket")
+    ):
+        proto_name = "WebSocket" if cam_url.startswith(("ws://", "wss://")) else "Ethernet"
+        print(f"[Hệ thống] Khởi tạo Camera qua mạng {proto_name} (Endpoint: {cam_url})")
         return EthernetWristCamera(url=cam_url, width=width, height=height, fps=fps)
 
     # ── Phân nhánh 2: Kết nối USB trực tiếp (GIỮ NGUYÊN 100% MÃ NGUỒN CŨ) ───

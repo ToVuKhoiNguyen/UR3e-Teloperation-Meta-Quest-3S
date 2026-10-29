@@ -1,29 +1,40 @@
-# Core numerical & robotics
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Core Math, Kinematics & Solver (CPU - Pyroki / JAX)
 numpy>=1.24.0
-scipy>=1.11.0
-torch>=2.0.0
-pyyaml>=6.0
+scipy>=1.10.0
 transforms3d>=0.4.1
-h5py>=3.9.0
+torch>=2.0.0
+jax>=0.4.0
+jaxlib>=0.4.0
+jaxlie>=1.4.0
+jaxtyping>=0.2.20
+pyroki @ git+https://github.com/chungmin99/pyroki.git@388e43e1fc0d0ee382968d3dd72970fd62a0450c
 
-# Network & WebXR Server
-aiohttp>=3.8.0
-cryptography>=41.0.0
-opencv-python-headless>=4.8.0
-pyrealsense2>=2.54.0
-
-# UR Robot Communication
-ur_rtde>=1.5.0
-
-# Viser 3D Web Visualizer
-viser>=0.2.0
+# Robot Hardware Communication (UR3e Real-time RTDE)
+ur-rtde>=1.6.0
+robot-descriptions>=1.11.0
 yourdfpy>=0.0.53
 trimesh>=4.0.0
 
-# PyRoki CPU Kinematics & Optimization (JAX)
-jax[cpu]>=0.4.20
-jaxlie>=1.0.0
-jaxls @ git+https://github.com/brentyi/jaxls.git
-pyroki @ git+https://github.com/chungmin99/pyroki.git
+# Camera Drivers & Networking (RealSense, ZeroMQ, OpenCV)
+pyrealsense2
+pyzmq>=24.0.0
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+imageio>=2.30.0
+
+# WebXR Cockpit & 3D Visualization
+viser>=0.1.0
+websockets>=11.0
+cryptography>=40.0.0
+
+# Utilities, Config & Data Logging
+pyyaml>=6.0
 loguru>=0.7.0
-robot_descriptions>=1.10.0
+rich>=13.0.0
+tyro>=0.8.0
+docstring-parser>=0.15
+h5py>=3.8.0
+matplotlib>=3.7.0
+

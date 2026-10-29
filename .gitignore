@@ -7,3 +7,8 @@ teleop_quest/static/wrist_camera.jpg
 *.log
 scratch/
 *.jsonl
+*.tar
+*.zip
+dist_package/
+.env
+.adb_keys/

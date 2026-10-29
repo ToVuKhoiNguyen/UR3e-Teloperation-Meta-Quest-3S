@@ -10,6 +10,7 @@ Mô-đun khởi tạo môi trường và hệ thống (Bootstrap):
 import os
 import time
 import socket
+import shutil
 import subprocess
 import threading
 import yaml
@@ -35,69 +36,124 @@ def ensure_ursim_container(robot_ip: str):
         s.connect((robot_ip, 29999))
         s.close()
     except Exception:
-        print("[Hệ thống] Phát hiện URSim chưa mở cổng. Đang tự động kích hoạt Docker URSim...")
-        res = subprocess.run(["docker", "start", "ursim"], capture_output=True, text=True)
-        if res.returncode != 0:
-            subprocess.Popen(
-                ["ros2", "run", "ur_client_library", "start_ursim.sh", "-m", "ur3e"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        time.sleep(3.5)
+        docker_bin = shutil.which("docker")
+        if docker_bin:
+            try:
+                print("[Hệ thống] Phát hiện URSim chưa mở cổng. Đang thử kích hoạt Docker URSim...")
+                res = subprocess.run([docker_bin, "start", "ursim"], capture_output=True, text=True, timeout=5)
+                if res.returncode != 0 and shutil.which("ros2"):
+                    subprocess.Popen(
+                        ["ros2", "run", "ur_client_library", "start_ursim.sh", "-m", "ur3e"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                time.sleep(3.5)
+            except Exception as dock_err:
+                print(f"[Hệ thống] Lưu ý khởi chạy URSim: {dock_err}")
+        else:
+            print("[Hệ thống] Lưu ý: URSim chưa phản hồi tại 127.0.0.1:29999 (nếu dùng URSim, hãy chắc chắn container URSim đã bật).")
 
-def start_adb_watcher():
-    """Tự động kiểm tra và chuyển tiếp cổng ADB nền liên tục nếu kính Quest cắm cáp USB"""
-    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup_quest_adb.sh")
-    if not os.path.exists(script_path):
-        return
+_adb_watcher_thread = None
+
+def start_adb_watcher(ports=(8443, 8444, 8445, 8080)):
+    """
+    Tự động kiểm tra và chuyển tiếp cổng ADB nền liên tục (daemon=True) lặp lại mỗi 2.5 giây.
+    Tự động hồi phục kết nối (Auto-Heal) khi kính cắm cáp muộn, bấm Allow muộn hoặc tuột dây cắm lại.
+    """
+    global _adb_watcher_thread
+    if _adb_watcher_thread is not None and _adb_watcher_thread.is_alive():
+        return _adb_watcher_thread
 
     def _adb_watcher():
-        last_status = None
+        adb_bin = shutil.which("adb")
+        if not adb_bin:
+            return
+
+        is_reversed = False
+        last_warn_t = 0.0
+
+        # Khởi động adb daemon nếu chưa chạy
+        try:
+            subprocess.run([adb_bin, "start-server"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
         while True:
             try:
-                res = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=2)
-                out = res.stdout
-                is_device = "\tdevice" in out
-                is_unauth = "\tunauthorized" in out
+                # 1. Chạy adb start-server (ẩn output lỗi nếu có)
+                subprocess.run([adb_bin, "start-server"], capture_output=True, timeout=3)
 
-                if is_device:
-                    # Kiểm tra xem các cổng reverse còn tồn tại hay đã bị Quest ngắt do sleep/chuyển tab
-                    res_rev = subprocess.run(["adb", "reverse", "--list"], capture_output=True, text=True, timeout=2)
-                    has_8443 = "tcp:8443" in res_rev.stdout
-                    
-                    if not has_8443 or last_status != "authorized":
-                        res_setup = subprocess.run(["bash", script_path], capture_output=True, text=True, timeout=5)
-                        if res_setup.returncode == 0:
-                            if last_status != "authorized":
-                                print("\n" + "=" * 55)
-                                print("[ADB USB] ĐÃ KẾT NỐI VÀ CHUYỂN TIẾP CỔNG THÀNH CÔNG!")
-                                print("-> Hãy mở Meta Quest Browser trên kính và truy cập:")
-                                print("   https://localhost:8443")
-                                print("=" * 55 + "\n")
-                            else:
-                                print("[ADB USB] Đã tự động khôi phục cổng chuyển tiếp bị rớt ngầm!")
-                            last_status = "authorized"
-                elif is_unauth:
-                    if last_status != "unauthorized":
-                        print("\n[ADB CẢNH BÁO] Kính Quest đã cắm USB nhưng CHƯA CẤP QUYỀN (unauthorized)!")
-                        print("-> Hãy đeo kính Meta Quest lên mắt.")
-                        print("-> Bấm 'Allow USB Debugging' (Cho phép gỡ lỗi USB) trên màn hình kính!")
-                        last_status = "unauthorized"
-                else:
-                    if last_status not in (None, "disconnected"):
-                        last_status = "disconnected"
+                # 2. Đọc kết quả lệnh adb devices
+                res = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, timeout=4)
+                lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+                device_lines = [l for l in lines if not l.startswith("List of devices") and not l.startswith("*")]
+
+                has_unauth = any("unauthorized" in dl for dl in device_lines)
+                authorized_devices = []
+                for dl in device_lines:
+                    parts = dl.split()
+                    if len(parts) >= 2 and parts[1] == "device":
+                        authorized_devices.append(parts[0])
+
+                # Trường hợp 1 (Chưa cắm cáp): Nếu danh sách trống -> đặt cờ is_reversed = False, im lặng đợi vòng lặp tiếp theo
+                if not device_lines or (not has_unauth and not authorized_devices):
+                    is_reversed = False
+
+                # Trường hợp 2 (Chưa cấp quyền trên máy mới - unauthorized):
+                elif has_unauth:
+                    is_reversed = False
+                    now = time.time()
+                    if now - last_warn_t >= 5.0:
+                        print("\n\033[93;1m⚠️  [QUEST USB] Phát hiện kính Quest nhưng CHƯA CẤP QUYỀN! Hãy đeo kính lên và bấm 'Allow USB Debugging' (Cho phép gỡ lỗi USB)!\033[0m")
+                        print("\033[93m   -> Mẹo: Tích vào 'Always allow from this computer' và bấm 'Allow' trên màn hình kính!\033[0m\n")
+                        last_warn_t = now
+
+                # Trường hợp 3 (Đã kết nối - <serial>\tdevice):
+                elif authorized_devices:
+                    target_serial = authorized_devices[0]
+                    # Kiểm tra lệnh adb reverse --list
+                    res_rev = subprocess.run([adb_bin, "-s", target_serial, "reverse", "--list"], capture_output=True, text=True, timeout=4)
+                    rev_out = res_rev.stdout
+
+                    need_reverse = (not is_reversed) or any(f"tcp:{p}" not in rev_out for p in ports)
+
+                    if need_reverse:
+                        success = True
+                        for p in ports:
+                            r = subprocess.run([adb_bin, "-s", target_serial, "reverse", f"tcp:{p}", f"tcp:{p}"], capture_output=True, text=True, timeout=4)
+                            if r.returncode != 0:
+                                success = False
+
+                        if success:
+                            is_reversed = True
+                            try:
+                                from teleop_quest.network_utils import get_local_ip
+                                local_ip = get_local_ip()
+                            except Exception:
+                                local_ip = "127.0.0.1"
+
+                            print("\n\033[92;1m" + "=" * 70 + "\033[0m")
+                            print(f"\033[92;1m✅ [QUEST USB] Đã kết nối cáp USB thành công! Mở trình duyệt trên Quest và vào ngay: https://localhost:8443 (hoặc qua Wi-Fi: https://{local_ip}:8443)\033[0m")
+                            print("   👉 3D Viser Dashboard: http://localhost:8080")
+                            print("\033[92;1m" + "=" * 70 + "\033[0m\n")
+
             except Exception:
                 pass
+
             time.sleep(2.5)
 
-    watcher_thread = threading.Thread(target=_adb_watcher, daemon=True)
-    watcher_thread.start()
+    _adb_watcher_thread = threading.Thread(target=_adb_watcher, daemon=True, name="AutoHealADBWatcher")
+    _adb_watcher_thread.start()
+    return _adb_watcher_thread
 
 def get_ursim_ip(default: str = "192.168.56.101") -> str:
     """Lấy địa chỉ IP mạng nội bộ của container Docker URSim"""
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return default
     try:
         res = subprocess.run(
-            ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "ursim"],
+            [docker_bin, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "ursim"],
             capture_output=True, text=True, timeout=1.0
         )
         ip = res.stdout.strip()
@@ -108,12 +164,26 @@ def get_ursim_ip(default: str = "192.168.56.101") -> str:
     return default
 
 def print_startup_banner(local_ip: str, quest_port: int = 8443, viser_port: int = 8080, ursim_port: int = 6080):
-    """In thông tin địa chỉ truy cập hệ thống"""
+    """In thông tin địa chỉ truy cập hệ thống trực quan và có thể click trực tiếp"""
     ursim_ip = get_ursim_ip()
-    print("\n" + "=" * 50)
-    print(f"IP MÁY CHỦ: {local_ip}")
-    print(f"-> Viser Dashboard: http://localhost:{viser_port}")
-    print(f"-> URSim PolyScope (noVNC): http://{ursim_ip}:{ursim_port}/vnc.html")
-    print(f"-> VR WebXR (Wi-Fi): https://{local_ip}:{quest_port}")
-    print(f"-> VR WebXR (Cáp USB): https://localhost:{quest_port}")
-    print("=" * 50 + "\n")
+    print("\n" + "=" * 68)
+    print("  🚀 HỆ THỐNG TELEOP QUEST ĐÃ KHỞI CHẠY THÀNH CÔNG!")
+    print("=" * 68)
+    print(f"  [1] Giao diện 3D Viser Dashboard (Máy tính):")
+    print(f"      👉 http://localhost:{viser_port}")
+    print()
+    print(f"  [2] Giao diện WebXR Cockpit (Trên máy tính hoặc Quest cắm cáp USB):")
+    print(f"      👉 https://localhost:{quest_port}")
+    if local_ip not in ("127.0.0.1", "localhost"):
+        print()
+        print(f"  [3] Giao diện WebXR Cockpit (Kính Quest qua Wi-Fi mạng LAN):")
+        print(f"      👉 https://{local_ip}:{quest_port}")
+    print()
+    print(f"  [4] PolyScope URSim Robot Simulator (noVNC):")
+    print(f"      👉 http://localhost:{ursim_port}/vnc.html (hoặc http://{ursim_ip}:{ursim_port}/vnc.html)")
+    print()
+    print("  🔒 Cảnh báo SSL: Khi vào lần đầu, bấm 'Nâng cao / Advanced' -> 'Tiếp tục truy cập / Proceed'")
+    print("  🔥 Tường lửa (Firewall): Nếu máy mới chặn cổng 8443/8080, hãy mở port:")
+    print("      sudo ufw allow 8443/tcp 8080/tcp 8444/tcp 8445/tcp")
+    print("=" * 68 + "\n")
+

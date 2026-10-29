@@ -33,13 +33,16 @@ def _urdf_filename_handler(fname: str) -> str:
         candidates = [
             os.path.join(BASE_DIR, "assets", "ur_description", rel_path),
             os.path.join(BASE_DIR, "assets", rel_path),
-            os.path.join(os.path.dirname(BASE_DIR), "src", "Universal_Robots_ROS2_Description", rel_path),
         ]
+        ext_ws = os.path.join(os.path.dirname(BASE_DIR), "src", "Universal_Robots_ROS2_Description", rel_path)
+        if os.path.exists(ext_ws):
+            candidates.append(ext_ws)
 
         for cand in candidates:
             if os.path.exists(cand):
                 return cand
     return fname
+
 
 
 class StatusProxy:

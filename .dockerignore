@@ -1,0 +1,39 @@
+# Version Control
+.git
+.gitignore
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Large Archives, Images & Dist Packages
+*.zip
+*.tar.gz
+*.tar
+dist_package/
+
+# Environment Secrets & Host Certificates
+.env
+certs/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE & Editor Config
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime Logs, Reports & Scratch
+logs/
+report/
+scratch/
+
+# OS Artifacts
+.DS_Store
+Thumbs.db

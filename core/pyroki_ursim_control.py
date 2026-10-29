@@ -42,16 +42,46 @@ IK_RETURN_SEEDS = 5                # Number of IK solutions to evaluate
 # URSim helper functions
 # ===========================================================================
 
-def setup_ursim(timeout: float = 35.0, is_real: bool = False) -> bool:
+def is_robot_alive(robot_ip: str, ports=(DASHBOARD_PORT, 30004, SECONDARY_PORT), timeout: float = 1.0) -> bool:
+    """Kiểm tra nhanh kết nối TCP tới robot/URSim trong tối đa 1.0 giây để tránh treo vô hạn."""
+    for p in ports:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((robot_ip, p))
+            s.close()
+            return True
+        except Exception:
+            pass
+    return False
+
+def setup_ursim(timeout: float = 8.0, is_real: bool = False) -> bool:
     """Kiểm tra trạng thái robot qua Dashboard (Port 29999). Hỗ trợ phân tách Robot thật và Mô phỏng."""
     robot_ip = get_robot_ip()
     target_type = "Robot thật (UR3e Real Hardware)" if is_real else "URSim Mô phỏng (Docker)"
+    
+    # 1. Kiểm tra nhanh: Nếu các port đều không mở, thử khởi động URSim nếu là local, hoặc trả về False ngay
+    if not is_robot_alive(robot_ip, timeout=0.8):
+        if not is_real and robot_ip in ("127.0.0.1", "localhost"):
+            try:
+                import subprocess, shutil
+                docker_bin = shutil.which("docker")
+                if docker_bin:
+                    subprocess.run([docker_bin, "start", "ursim"], capture_output=True, timeout=3)
+                    time.sleep(1.5)
+            except Exception:
+                pass
+        if not is_robot_alive(robot_ip, timeout=0.8):
+            print(f"[Dashboard] Robot/URSim tại {robot_ip} chưa mở cổng mạng. Chuyển sang mô phỏng nội bộ.")
+            return False
+
     print(f"[Dashboard] Đang kiểm tra trạng thái {target_type} qua cổng 29999 tại IP: {robot_ip}...")
     if not is_real and robot_ip in ("127.0.0.1", "localhost", "192.168.56.101"):
         print(f"[URSim] Giao diện Teach Pendant PolyScope (noVNC): http://{robot_ip}:6080/vnc.html")
 
     start_time = time.time()
-    while time.time() - start_time < timeout:
+    effective_timeout = min(timeout, 8.0 if is_real else 10.0)
+    while time.time() - start_time < effective_timeout:
         s = None
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -277,15 +307,15 @@ class PyrokiURSim:
         print("=" * 60)
 
         # Kiểm tra Dashboard (cổng 29999) với xử lý lỗi thân thiện
-        dashboard_ok = setup_ursim(timeout=8.0 if self.is_real else 35.0, is_real=self.is_real)
+        dashboard_ok = setup_ursim(timeout=4.0 if self.is_real else 6.0, is_real=self.is_real)
         if not dashboard_ok and not self.is_real:
-            raise RuntimeError("Robot not RUNNING. Check URSim container.")
+            raise ConnectionError(f"URSim không phản hồi tại {current_ip}:29999. Khởi động chế độ mô phỏng nội bộ.")
         elif not dashboard_ok and self.is_real:
             print("\033[93m[CẢNH BÁO] Không có phản hồi Dashboard. Tiếp tục thử kết nối trực tiếp cổng RTDE...\033[0m")
 
         print(f"[Setup] Connecting RTDEReceive ({current_ip}:30004)...")
-        max_retries = 5 if self.is_real else 3
-        retry_delay = 1.0
+        max_retries = 2 if not self.is_real else 4
+        retry_delay = 0.5 if not self.is_real else 1.0
         self.rr = None
         for attempt in range(1, max_retries + 1):
             try:
@@ -307,14 +337,12 @@ class PyrokiURSim:
                         print("   1. Mở màn hình Teach Pendant (PolyScope): Vào Settings -> System -> Network.")
                         print("   2. Xem trạng thái đèn mạng: Nếu màu ĐỎ -> cáp Ethernet chưa nhận hoặc IP chưa được kích hoạt.")
                         print(f"   3. Kiểm tra địa chỉ IP hiển thị trên màn hình PolyScope: Có đúng là {current_ip} không?")
-                        print(f"      - Nếu robot dùng DHCP: Xem IP mới được cấp là gì rồi chạy lại lệnh với --robot-ip <IP_MOI>.")
-                        print(f"      - Nếu robot dùng IP Tĩnh: Đặt IP={current_ip}, Subnet=255.255.255.0, Gateway=10.42.0.1 rồi bấm Apply.")
                     else:
                         print(f"\033[93m-> CHẨN ĐOÁN: Robot phản hồi Ping nhưng cổng RTDE 30004 bị từ chối kết nối!\033[0m")
                         print("   1. Đảm bảo robot đã bật nguồn và nhả phanh (Power On -> Brake Release) ở trạng thái RUNNING.")
                         print("   2. Chuyển Teach Pendant sang chế độ Remote Control (góc trên bên phải màn hình PolyScope).")
                     print("\033[91m" + "!" * 72 + "\033[0m\n")
-                    raise
+                    raise ConnectionError(f"Không thể kết nối RTDE tới robot tại {current_ip}:30004 ({e})")
 
         self._ik = None
         self.scene_file = scene_file
@@ -456,7 +484,83 @@ class PyrokiURSim:
         return state
 
     def close(self):
-        self.rr.disconnect()
+        if hasattr(self, "rr") and self.rr:
+            self.rr.disconnect()
         print("[Setup] Disconnected")
+
+
+class DummyRTDEReceive:
+    """Mock RTDEReceiveInterface cho chế độ Kinematic/Dummy Simulation nội bộ."""
+    def __init__(self, parent):
+        self._parent = parent
+    def getActualQ(self):
+        return self._parent.joints()
+    def getActualQd(self):
+        return [0.0] * 6
+    def getTargetQ(self):
+        return self._parent.joints()
+    def getTargetQd(self):
+        return [0.0] * 6
+    def getTargetQdd(self):
+        return [0.0] * 6
+    def getActualTCPPose(self):
+        return self._parent.tcp()
+    def getActualTCPSpeed(self):
+        return [0.0] * 6
+    def getRobotMode(self):
+        return 7  # RUNNING
+    def getSafetyMode(self):
+        return 1  # NORMAL
+    def isEmergencyStopped(self):
+        return False
+    def isProtectiveStopped(self):
+        return False
+    def getSpeedScaling(self):
+        return 1.0
+    def isConnected(self):
+        return True
+    def disconnect(self):
+        pass
+
+class StandbyRobotController:
+    """Mock/Kinematic simulation controller used when Robot hardware / URSim is not connected."""
+    def __init__(self, scene_file: Optional[str] = None, initial_joints: Optional[List[float]] = None):
+        self.scene_file = scene_file
+        self._ik = PyrokiIK(scene_file=scene_file)
+        self._current_q = list(initial_joints) if initial_joints else [0.0, -2.2, 1.9, -1.2708, -1.5708, 0.0]
+        self.rr = DummyRTDEReceive(self)
+        self.is_real = False
+
+    @property
+    def ik_solver(self) -> PyrokiIK:
+        return self._ik
+
+    def joints(self) -> List[float]:
+        return list(self._current_q)
+
+    def tcp(self) -> List[float]:
+        try:
+            fk = self._ik.fk(self._current_q)
+            return list(fk["pos"]) + [0.0, 0.0, 0.0]
+        except Exception:
+            return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    def get_robot_state(self, selected_streams: Optional[set] = None) -> Dict[str, Any]:
+        return {
+            "actual_q": list(self._current_q),
+            "actual_qd": [0.0] * 6,
+            "target_q": list(self._current_q),
+            "actual_tcp_pose": self.tcp(),
+            "robot_mode": 7,
+            "safety_mode": 1
+        }
+
+    def servo_j(self, q: List[float]):
+        if q is not None and len(q) == 6:
+            self._current_q = list(q)
+
+    def close(self):
+        pass
+
 
 

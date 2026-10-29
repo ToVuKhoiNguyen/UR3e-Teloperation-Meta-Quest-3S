@@ -11,9 +11,15 @@ echo "=========================================================="
 # 1. Kiểm tra adb đã cài đặt chưa
 if ! command -v adb &> /dev/null; then
     echo "[!] adb chua duoc cai dat tren he thong."
-    echo "[*] Dang cai dat android-tools-adb..."
-    sudo apt update && sudo apt install -y adb
+    if [ "$(id -u)" -eq 0 ]; then
+        apt-get update -qq && apt-get install -y --no-install-recommends adb
+    elif command -v sudo &> /dev/null; then
+        sudo apt update && sudo apt install -y adb
+    else
+        echo "[!] Khong the cai dat adb do khong co quyen root/sudo. Bo qua ADB."
+    fi
 fi
+
 
 # 2. Khoi dong adb server
 adb start-server

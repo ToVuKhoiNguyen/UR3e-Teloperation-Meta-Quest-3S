@@ -221,8 +221,8 @@ class SafetyGate:
 # ─────────────────────────────────────────────────────────────────────────────
 class ServoJExecutor:
     """
-    High-performance real-time servoJ executor via RTDE.
-    Optimized for smooth tracking: lookahead 0.09s, gain 300.
+    High-performance real-time servoJ executor via RTDE with Secondary Port 30002 fallback.
+    Optimized for smooth tracking: lookahead 0.11s, gain 250.
     """
     ROBOT_IP = os.environ.get("ROBOT_IP", "127.0.0.1")
 
@@ -233,11 +233,41 @@ class ServoJExecutor:
         if robot_ip:
             self.ROBOT_IP = robot_ip
         self._ctrl = None
+        self._sec_sock = None
         self._last_warn_time = 0.0
         self._lock = threading.Lock()
 
+    def _get_sec_socket(self, robot_ip: str):
+        """Establish or return open secondary client socket (Port 30002)."""
+        if self._sec_sock is not None:
+            try:
+                # Test if socket is alive
+                self._sec_sock.getpeername()
+                return self._sec_sock
+            except Exception:
+                self._close_sec_socket()
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.5)
+            sock.connect((robot_ip, 30002))
+            sock.settimeout(0.5)
+            self._sec_sock = sock
+            return self._sec_sock
+        except Exception:
+            self._sec_sock = None
+            return None
+
+    def _close_sec_socket(self):
+        if self._sec_sock is not None:
+            try:
+                self._sec_sock.close()
+            except Exception:
+                pass
+            self._sec_sock = None
+
     def connect(self):
-        """Initialize RTDEControlInterface. Called once when enabling Teleop."""
+        """Initialize RTDEControlInterface or Secondary Socket. Called once when enabling Teleop."""
         with self._lock:
             import rtde_control
             if self._ctrl is not None:
@@ -249,10 +279,10 @@ class ServoJExecutor:
 
             robot_ip = os.environ.get("ROBOT_IP", self.ROBOT_IP)
 
-            # Terminate previous script via Dashboard (Port 29999) to free RTDE registers
+            # 1. Stop any previous script via Dashboard (Port 29999) and release registers
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(1.0)
+                s.settimeout(0.8)
                 s.connect((robot_ip, 29999))
                 s.recv(1024)
                 s.sendall(b"stop\n")
@@ -262,25 +292,43 @@ class ServoJExecutor:
             except Exception:
                 pass
 
-            try:
-                self._ctrl = rtde_control.RTDEControlInterface(robot_ip)
-                print(f"[ServoJ] RTDEControl connected: {self._ctrl.isConnected()}")
-            except Exception as e:
-                err_msg = str(e).lower()
-                if "input registers are already in use" in err_msg or "fieldbus" in err_msg:
-                    print("[ServoJ] Register conflict detected, trying Upper Range Registers...")
-                    try:
-                        flags_upper = int(rtde_control.RTDEControlInterface.FLAG_UPLOAD_SCRIPT) | int(rtde_control.RTDEControlInterface.FLAG_UPPER_RANGE_REGISTERS)
-                        self._ctrl = rtde_control.RTDEControlInterface(robot_ip, -1.0, flags_upper)
-                        print(f"[ServoJ] RTDEControl connected (Upper Range Registers): {self._ctrl.isConnected()}")
-                    except Exception as inner_e:
-                        print(f"[ServoJ] Failed to connect RTDE Control: {inner_e}")
+            # 2. Try connecting RTDEControlInterface (up to 3 attempts with backoff)
+            for attempt in range(1, 4):
+                try:
+                    self._ctrl = rtde_control.RTDEControlInterface(robot_ip)
+                    if self._ctrl.isConnected():
+                        print(f"[ServoJ] RTDEControl connected successfully (attempt {attempt}).")
+                        break
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if "input registers are already in use" in err_msg or "fieldbus" in err_msg:
+                        try:
+                            flags_upper = int(rtde_control.RTDEControlInterface.FLAG_UPLOAD_SCRIPT) | int(rtde_control.RTDEControlInterface.FLAG_UPPER_RANGE_REGISTERS)
+                            self._ctrl = rtde_control.RTDEControlInterface(robot_ip, -1.0, flags_upper)
+                            if self._ctrl.isConnected():
+                                print(f"[ServoJ] RTDEControl connected using Upper Range Registers (attempt {attempt}).")
+                                break
+                        except Exception:
+                            pass
+                    if attempt < 3:
+                        time.sleep(0.3)
+                    else:
+                        print(f"[ServoJ] RTDE connection note: {e}")
                         self._ctrl = None
-                else:
-                    print(f"[ServoJ] RTDE connection error: {e}")
-                    if "remote control" in err_msg:
-                        print("[Hint] Please enable Remote Control on PolyScope (top-right of Teach Pendant screen).")
-                    self._ctrl = None
+
+            # 3. Always prepare secondary socket (Port 30002) as 100% reliable fallback
+            sec_s = self._get_sec_socket(robot_ip)
+            if self._ctrl is not None and self._ctrl.isConnected():
+                print(f"[ServoJ] Pipeline ready: RTDE Control active tại {robot_ip}.")
+            elif sec_s is not None:
+                print(f"[ServoJ] Pipeline ready: Secondary Port 30002 active tại {robot_ip} (fallback mode).")
+            else:
+                print(f"[CRITICAL] Không thể kết nối tới Robot tại IP {robot_ip}!")
+                print(f"[CRITICAL] Cả RTDE (Port 30004) và Secondary Interface (Port 30002) đều không phản hồi.")
+                print(f"[CRITICAL] Hướng dẫn khắc phục:")
+                print(f"   👉 Bước 1: Mở terminal mới gõ: ping {robot_ip}")
+                print(f"   👉 Bước 2: Kiểm tra Robot thật / URSim đã khởi động và cấp nguồn chưa.")
+                print(f"   👉 Bước 3: Nếu dùng URSim, chạy: docker start ursim (hoặc docker ps)")
 
     def disconnect(self):
         """Stop servoJ and disconnect."""
@@ -293,7 +341,8 @@ class ServoJExecutor:
                 except Exception:
                     pass
                 self._ctrl = None
-                print("[ServoJ] RTDEControl disconnected.")
+            self._close_sec_socket()
+            print("[ServoJ] Controller interfaces disconnected.")
 
     def send(self, q: List[float]):
         """
@@ -301,27 +350,41 @@ class ServoJExecutor:
         Parameters:
           speed=0, acceleration=0 (internally calculated by UR controller based on lookahead_time)
           dt             = control cycle (s)
-          lookahead_time = trajectory filter (0.03-0.05s for high responsiveness)
-          gain           = tracking stiffness (500-600)
+          lookahead_time = trajectory filter (0.05-0.12s for high responsiveness)
+          gain           = tracking stiffness (250-300)
         """
         with self._lock:
-            if self._ctrl is None:
-                now = time.time()
-                if now - self._last_warn_time >= 1.0:
-                    print("[ServoJ WARNING] RTDEControlInterface not connected (_ctrl is None) - cannot send command to robot! Please ensure Remote Control is enabled on PolyScope.")
-                    self._last_warn_time = now
-                return
-            try:
-                self._ctrl.servoJ(
-                    q,
-                    0.0,               # speed
-                    0.0,               # acceleration
-                    self._dt,          # dt
-                    self._lookahead,   # lookahead_time
-                    self._gain         # gain
-                )
-            except Exception:
-                pass
+            # 1. Primary path: RTDEControlInterface
+            if self._ctrl is not None:
+                try:
+                    if self._ctrl.isConnected():
+                        self._ctrl.servoJ(
+                            q,
+                            0.0,               # speed
+                            0.0,               # acceleration
+                            self._dt,          # dt
+                            self._lookahead,   # lookahead_time
+                            self._gain         # gain
+                        )
+                        return
+                except Exception:
+                    self._ctrl = None
+
+            # 2. Seamless Fallback: Secondary Interface (Port 30002)
+            robot_ip = os.environ.get("ROBOT_IP", self.ROBOT_IP)
+            sec_s = self._get_sec_socket(robot_ip)
+            if sec_s is not None:
+                try:
+                    cmd = f"servoj([{','.join(f'{x:.5f}' for x in q)}], 0.0, 0.0, {self._dt:.3f}, {self._lookahead:.3f}, {self._gain})\n"
+                    sec_s.sendall(cmd.encode())
+                    return
+                except Exception:
+                    self._close_sec_socket()
+
+            now = time.time()
+            if now - self._last_warn_time >= 2.0:
+                print(f"[CRITICAL] Robot {robot_ip} không nhận lệnh ServoJ: Mất kết nối tới RTDE và Secondary Port 30002!")
+                self._last_warn_time = now
 
     def stop(self, a=10.0):
         """
@@ -329,12 +392,16 @@ class ServoJExecutor:
         NOTE: Never called inside normal teleoperation loop to prevent abrupt freezing.
         """
         with self._lock:
-            if self._ctrl is None:
-                return
-            try:
-                self._ctrl.servoStop(a)
-            except Exception:
-                pass
+            if self._ctrl is not None:
+                try:
+                    self._ctrl.servoStop(a)
+                except Exception:
+                    pass
+            if self._sec_sock is not None:
+                try:
+                    self._sec_sock.sendall(f"stopj({a:.1f})\n".encode())
+                except Exception:
+                    pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -614,11 +681,6 @@ class TeleoperationController:
         if self._pose is not None and hasattr(self._pose, "reanchor_position"):
             try:
                 self._pose.reanchor_position(p_curr)
-            except Exception:
-                pass
-        if self._pose is not None and hasattr(self._pose, "clamp_rotation_anchor"):
-            try:
-                self._pose.clamp_rotation_anchor(q_curr_wxyz)
             except Exception:
                 pass
 

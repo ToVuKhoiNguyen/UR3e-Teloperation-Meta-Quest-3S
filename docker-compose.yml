@@ -1,0 +1,37 @@
+services:
+  teleop-quest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ur3e_teleoperation:latest
+    container_name: ur3e_teleoperation
+    network_mode: "host"
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ~/.android:/root/.android
+      - ./teleop_quest:/app/teleop_quest
+      - ./teleop:/app/teleop
+      - ./safety:/app/safety
+      - ./core:/app/core
+      - ./config:/app/config
+      - ./assets:/app/assets
+      - ./main.py:/app/main.py
+      - ./logs:/app/logs
+      - ./certs:/app/certs
+      - ./.env:/app/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ROBOT_IP=${ROBOT_IP:-127.0.0.1}
+      - CAM_URL=${CAM_URL:-tcp://10.42.0.100:5555}
+      - ROBOT_MODE=${ROBOT_MODE:-sim}
+      - CAMERA_TYPE=${CAMERA_TYPE:-synthetic}
+      - CAM_SOURCE=${CAM_SOURCE:-usb}
+    command: >
+      python main.py
+      --robot=${ROBOT_MODE:-sim}
+      --robot-ip=${ROBOT_IP:-127.0.0.1}
+      --camera=${CAMERA_TYPE:-synthetic}
+      --cam-source=${CAM_SOURCE:-usb}
+      --cam-url=${CAM_URL:-tcp://10.42.0.100:5555}

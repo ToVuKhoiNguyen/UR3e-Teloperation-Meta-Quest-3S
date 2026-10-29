@@ -9,7 +9,14 @@ import threading
 import time
 import traceback
 import urllib.parse
+import subprocess
 import websockets
+
+def _free_port(port: int):
+    try:
+        subprocess.run(f"fuser -k {port}/tcp 2>/dev/null", shell=True)
+    except Exception:
+        pass
 
 class QuestServer:
     def __init__(self, cert: str, key: str, host: str = "0.0.0.0", http_port: int = 8443, ws_port: int = 8444, ws_port_plain: int = 8445, record_file: str = None):
@@ -360,9 +367,28 @@ class QuestServer:
             pass
 
     def _run_http(self):
+        # Tự động kiểm tra hoặc sinh mới SSL certificate nếu thiếu hoặc bị lỗi
+        if not self.cert or not self.key or not os.path.exists(self.cert) or not os.path.exists(self.key):
+            try:
+                from .network_utils import setup_ssl, get_local_ip
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                self.cert, self.key = setup_ssl(base_dir, get_local_ip())
+            except Exception as e:
+                print(f"[Quest] Chú ý tự tạo SSL cert: {e}")
+
         # Cấu hình HTTPServer đa luồng (ThreadingHTTPServer)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(self.cert, self.key)
+        try:
+            context.load_cert_chain(self.cert, self.key)
+        except Exception as e:
+            print(f"[Quest ERROR] Không thể nạp SSL cert ({self.cert}, {self.key}): {e}. Đang tái tạo...")
+            try:
+                from .network_utils import setup_ssl, get_local_ip
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                self.cert, self.key = setup_ssl(base_dir, get_local_ip())
+                context.load_cert_chain(self.cert, self.key)
+            except Exception as e2:
+                print(f"[Quest CRITICAL] Lỗi nạp SSL cert tái tạo: {e2}")
 
         static_dir = self.static_dir
         server_self = self
@@ -572,26 +598,46 @@ class QuestServer:
                 pass  # Tắt log mặc định để tránh spam terminal
 
         class ThreadedSSLServer(http.server.ThreadingHTTPServer):
-            request_queue_size = 64
-            def get_request(self):
-                sock, addr = self.socket.accept()
-                sock.settimeout(5.0)
+            daemon_threads = True
+            allow_reuse_address = True
+            request_queue_size = 128
+
+            def finish_request(self, request, client_address):
                 try:
-                    ssl_sock = context.wrap_socket(sock, server_side=True)
-                    return ssl_sock, addr
+                    request.settimeout(6.0)
+                    ssl_sock = context.wrap_socket(request, server_side=True)
+                    ssl_sock.settimeout(15.0)
                 except Exception:
                     try:
-                        sock.close()
+                        request.close()
                     except Exception:
                         pass
-                    raise
+                    return
 
+                try:
+                    self.RequestHandlerClass(ssl_sock, client_address, self)
+                except Exception:
+                    try:
+                        ssl_sock.close()
+                    except Exception:
+                        pass
+
+        _free_port(self.http_port)
         try:
             httpd = ThreadedSSLServer((self.host, self.http_port), RequestHandler)
             print(f"[Quest] HTTPS Server running at https://{self.host}:{self.http_port}")
             httpd.serve_forever()
         except OSError as e:
             if e.errno == 98:
+                try:
+                    _free_port(self.http_port)
+                    time.sleep(0.5)
+                    httpd = ThreadedSSLServer((self.host, self.http_port), RequestHandler)
+                    print(f"[Quest] HTTPS Server running at https://{self.host}:{self.http_port} (auto-recovered)")
+                    httpd.serve_forever()
+                    return
+                except Exception:
+                    pass
                 print(f"[Quest] Lỗi: Cổng {self.http_port} đã bị chiếm dụng. Vui lòng tắt các tiến trình cũ.")
             else:
                 print(f"[Quest] HTTPS Error: {e}")
@@ -603,7 +649,13 @@ class QuestServer:
 
     async def _ws_main(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(self.cert, self.key)
+        try:
+            context.load_cert_chain(self.cert, self.key)
+        except Exception:
+            from .network_utils import setup_ssl, get_local_ip
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.cert, self.key = setup_ssl(base_dir, get_local_ip())
+            context.load_cert_chain(self.cert, self.key)
 
         async def handler(websocket):
             remote_ip = websocket.remote_address[0] if websocket.remote_address else "unknown"
@@ -699,6 +751,8 @@ class QuestServer:
                         self._latest_frame = None
                         self._drive_mode = False
 
+        _free_port(self.ws_port)
+        _free_port(self.ws_port_plain)
         try:
             # Chạy đồng thời WSS (cổng 8444 cho Quest WebXR) và WS (cổng 8445 cho PC/local preview)
             async with websockets.serve(handler, self.host, self.ws_port, ssl=context):
@@ -708,6 +762,17 @@ class QuestServer:
                     await asyncio.Future()  # run forever
         except OSError as e:
             if e.errno == 98:
+                try:
+                    _free_port(self.ws_port)
+                    _free_port(self.ws_port_plain)
+                    await asyncio.sleep(0.5)
+                    async with websockets.serve(handler, self.host, self.ws_port, ssl=context):
+                        async with websockets.serve(handler, self.host, self.ws_port_plain):
+                            print(f"[Quest] WSS/WS Server running at wss://{self.host}:{self.ws_port} (auto-recovered)")
+                            await asyncio.Future()
+                            return
+                except Exception:
+                    pass
                 print(f"[Quest] Lỗi: Cổng WebSocket ({self.ws_port} hoặc {self.ws_port_plain}) đã bị chiếm dụng.")
             else:
                 print(f"[Quest] WSS Error: {e}")

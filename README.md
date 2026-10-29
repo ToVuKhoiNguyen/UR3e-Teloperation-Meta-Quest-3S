@@ -1,8 +1,17 @@
 # UR3e Điều Khiển Teleoperation Thời Gian Thực qua Meta Quest 3S, Viser 3D & PyRoki CPU IK
 
-Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleoperation), hiển thị không gian 3D và thu thập dữ liệu trình diễn đa phương thức cho cánh tay robot công nghiệp Universal Robots UR3e sử dụng kính thực tế ảo Meta Quest 3S (WebXR) và trình duyệt Web máy tính qua giao diện Viser 3D WebGL. Hệ thống tích hợp bộ giải bài toán động học nghịch (Inverse Kinematics - IK) siêu tốc thuần CPU dựa trên Google PyRoki, JAX và `jaxls` (độ trễ ~1ms sau JIT warm-up, hoàn toàn không cần card đồ họa rời NVIDIA/CUDA). Ngoài ra, hệ thống sở hữu module **Selectable Multimodal Data Recorder** (Ghi HDF5 dạng luồng phân mảnh Chunked Streaming với bộ đệm RingBuffer chống tràn RAM và đồng bộ thời gian phần cứng Microsecond Hardware Timestamp $< 1.5$ms) tối ưu cho huấn luyện Robot AI (Imitation Learning, Diffusion Policy, ACT), cùng bộ công cụ giải nén dữ liệu tự động **HDF5 Extraction Suite**.
+Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleoperation), hiển thị không gian 3D và thu thập dữ liệu trình diễn đa phương thức cho cánh tay robot công nghiệp Universal Robots UR3e sử dụng kính thực tế ảo Meta Quest 3S (WebXR) và trình duyệt Web máy tính qua giao diện Viser 3D WebGL. Hệ thống tích hợp bộ giải bài toán động học nghịch (Inverse Kinematics - IK) siêu tốc thuần CPU dựa trên Google PyRoki, JAX và `jaxls` (độ trễ ~1ms sau JIT warm-up, hoàn toàn không cần card đồ họa rời NVIDIA/CUDA). Ngoài ra, hệ thống sở hữu module **Selectable Multimodal Data Recorder** (Ghi HDF5 dạng luồng phân mảnh Chunked Streaming với bộ đệm RingBuffer chống tràn RAM và đồng bộ thời gian phần hardware timestamp $< 1.5$ms) tối ưu cho huấn luyện Robot AI (Imitation Learning, Diffusion Policy, ACT), cùng bộ công cụ giải nén dữ liệu tự động **HDF5 Extraction Suite**.
+
+> [!IMPORTANT]
+> ### ⚡ KHỞI TẠO NHANH TRÊN MÁY MỚI (CHỈ LÀM 1 BƯỚC DUY NHẤT - 100% OFFLINE)
+> Người dùng trên máy tính mới **KHÔNG CẦN CÀI THÊM BẤT KỲ THƯ VIỆN NÀO** (không cần pip, venv hay conda). Chỉ cần mở Terminal tại thư mục dự án và gõ:
+> ```bash
+> source activate_env.sh
+> ```
+> *(Lệnh trên sẽ tự động nạp file ảnh Docker Offline `teleop_quest_offline.tar` trong vài giây và thiết lập alias lệnh `python`. Sau đó bạn chỉ việc copy-paste ĐÚNG Y HỆT các câu lệnh `python ...` bên dưới để chạy ngay! Chi tiết xem tại [`HUONG_DAN_CHAY.md`](file:///home/nguyen/ur_ws/pyroki_ursim/HUONG_DAN_CHAY.md)).*
 
 ---
+
 
 ## 1. Tính Năng Nổi Bật
 
@@ -16,11 +25,20 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
      - **Cao / Thấp:** Nâng hạ độ cao Z thẳng đứng trên mặt bàn làm việc.
      - **Hiệu chuẩn hướng bàn máy bằng Nút B:** Lấy góc yaw của kính (`head_quat`) làm hệ quy chiếu bàn máy cố định (`_desk_u_fwd`, `_desk_u_right`).
      - **Vùng chết tĩnh 3mm (`POS_DEADBAND = 0.003`m):** Hấp thụ hoàn toàn vi rung tay sinh học tự nhiên khi giữ phím.
-   - **Chế độ điều khiển VR phân tách chức năng:**
-     - **Cò trỏ (Index Trigger):** Tịnh tiến theo cơ chế Mặt Đồng Hồ (khóa góc xoay).
-     - **Cò giữa (Hand Grip):** Xoay 3 trục độc lập cố định theo hệ tọa độ Gốc (Base Frame Left-Multiply): Động tác Pitch luôn ngửa/cụp thẳng về phía thân trụ Base, Roll xoay quanh phương cánh tay và Yaw xoay quanh trục đứng Base Z, triệt tiêu 100% sự phụ thuộc vào góc xoay camera.
-     - **Bóp cả Trigger + Grip:** Chuyển động phối hợp 6-DoF đồng thời.
-     - **Smart Clutch:** Tự động neo mốc tọa độ mới khi chuyển trạng thái nút bấm, loại bỏ hoàn toàn hiện tượng nhảy cóc tọa độ (Zero Teleport).
+   - **Chế độ điều khiển VR phân tách chức năng độc lập (Functional Decoupled Teleop):**
+     - **Cò trỏ (Index Trigger) — Dịch chuyển tịnh tiến (Translation Only):** Tịnh tiến theo cơ chế Mặt Đồng Hồ (khóa cứng góc xoay), chuyển động thẳng tắp và cách ly tuyệt đối khỏi các rung động xoay cổ tay vô ý.
+     - **Cò giữa (Hand Grip) — Cơ chế xoay bất biến tư thế (Posture-Invariant Horizon-Stabilized Mapping):**
+       - **Triệt tiêu góc nghiêng tĩnh (Horizon-Leveled Hand Frame):** Tự động khử góc nghiêng/chúc tự nhiên (30°–45°) và độ xoay ban đầu của bàn tay người vận hành khi bóp giữ nút Grip, đưa hệ tọa độ tay cầm về trạng thái cân bằng phẳng theo phương chân trời.
+       - **Hệ 3 trục trực giao hoàn hảo (Orthogonal Triad):** Tách bạch 100% ba cử động cổ tay tương ứng với 3 hành vi vật lý độc lập của robot:
+         1. **Gập cổ tay (Lắc trái / phải):** Điều khiển quay quanh trục thẳng đứng Z (Yaw) của đầu robot $\rightarrow$ Quét ngang song song mặt bàn.
+         2. **Uống nước / Đặt cốc (Duỗi / gập cổ tay):** Điều khiển quay quanh trục ngang (Pitch) của đầu robot $\rightarrow$ Ngửa lên / chúc xuống.
+         3. **Vặn chìa khóa (Xoay tròn cổ tay - Clock-face Roll):** Điều khiển quay tròn quanh trục dọc cánh tay (Roll).
+       - **Bám động theo hướng đầu máy ($R_{\text{tcp\_origin}}$):** Hệ 3 trục quay được neo động theo hướng thực tế hiện tại của đầu tay máy, đảm bảo ở **mọi vị trí và tư thế** (Home, nghiêng, cúi sâu, vươn xa) thì cử động cổ tay người vẫn điều khiển đúng chiều vật lý tương ứng của robot.
+       - **Chống trôi / giật vi mô (Deadzone & Micro-Jitter Filtering):**
+         - Thiết lập vùng chết xoay tĩnh (`ROT_DEADBAND = 0.05` rad $\approx 2.86^\circ$) và vùng chết tịnh tiến tĩnh (`POS_DEADBAND = 0.003` m $= 3$mm), triệt tiêu hoàn toàn hiện tượng rung giật sinh học vi mô (Micro-Jitter) của bàn tay khi giữ phím.
+         - **Khóa trục xoay ưu thế (Dominant Single-Axis Lock):** Tự động phát hiện và khóa cứng chuyển động theo trục có biên độ xoay lớn nhất, chống hiện tượng phân rã chéo (Cross-talk) sang 2 trục phụ khi cổ tay không thực sự trực giao hoàn hảo.
+     - **Bóp đồng thời cả Trigger + Grip:** Cho phép chuyển động phối hợp 6-DoF tự do đồng thời (Full 6-DoF Teleop).
+     - **Cơ chế ly hợp thông minh (Smart Clutching):** Tự động chốt mỏ neo tọa độ mới khi bóp lại phím, triệt tiêu 100% hiện tượng nhảy vọt tọa độ (Zero Teleport), cho phép người vận hành với tới mọi điểm trong không gian làm việc chỉ với không gian sải tay hữu hạn.
 
 2. **Động Học Nghịch Siêu Tốc Thuần CPU (PyRoki + JAX/jaxls) & Tối Ưu Không Gian Khớp:**
    - Giải bài toán tối ưu phi tuyến bình phương tối thiểu trên CPU bằng PyRoki kết hợp `jaxls` (Levenberg-Marquardt) và JAX JIT compile (~1ms sau warm-up), loại bỏ 100% sự phụ thuộc vào card đồ họa NVIDIA hoặc CUDA runtime.
@@ -60,12 +78,13 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
    - **Trực quan hóa & Sanity Check đa phương thức (`core/visualize_data.py`):** Bố cục 2x2 gồm động học 6 góc khớp (`qpos`), tín hiệu ngàm (`gripper_cmd`), quỹ đạo không gian 3D (`tcp_pose` Start/End) và khung hình camera RGB (`wrist_camera`), hỗ trợ hiển thị GUI tương tác hoặc tự động xuất ảnh tĩnh PNG độ phân giải cao cho máy chủ Headless/SSH.
    - **Giải nén dữ liệu tự động (`core/extract_hdf5.py`):** Quét đệ quy cây dữ liệu HDF5 để xuất video MP4 (chuẩn H.264/FastStart), chuỗi ảnh Depth PNG 16-bit nguyên bản, các file `.csv` có header ngữ nghĩa vật lý và tệp tóm tắt `summary.txt`.
 
-8. **Luồng Stream Camera Cổ Tay Trực Tiếp (30 FPS RAM Buffer) & Không Ghi Đĩa (Zero-Lag):**
+8. **Luồng Stream Camera Cổ Tay Đa Phương Thức (USB, WebSocket & ZeroMQ):**
    - Kiến trúc đa luồng độc lập (`CameraStreamPipeline`) truyền stream 30 FPS mượt mà:
      - **Triệt tiêu hoàn toàn Disk I/O:** Frame JPEG được lưu trực tiếp trên bộ đệm RAM (`_latest_jpeg`), loại bỏ 100% hiện tượng giật lag / glitch hình ảnh do ghi đĩa từng frame.
-     - **Camera mô phỏng 3D (`SyntheticWristCamera`):** Kết xuất ảnh RGB 640x480 góc nhìn Eye-in-Hand từ đầu tay máy.
-     - **Camera USB vật lý thật (`RealWristCamera`):** Giao tiếp trực tiếp Intel RealSense D435/D455 qua SDK `pyrealsense2` (`--cam-source usb`).
-     - **Camera qua mạng Ethernet (`EthernetWristCamera`):** Nhận stream qua socket ZMQ Zero-lag (`CONFLATE=1`) hoặc HTTP stream từ máy tính nhúng (`--cam-source eth --cam-url tcp://192.168.1.100:5555`).
+     - **Camera qua luồng mạng WebSocket (Khuyến nghị chuẩn mới):** Sử dụng chuẩn WebSocket RFC 6455 (`--cam-source ws --cam-url ws://<IP>:8765`), hỗ trợ truyền nhận nhị phân siêu nhẹ, độ trễ $< 3$ms, tích hợp server độc lập `teleop_quest/websocket_camera_server.py`.
+     - **Camera qua mạng Ethernet ZeroMQ (`EthernetWristCamera`):** Nhận stream qua socket ZMQ Zero-lag (`CONFLATE=1`) triệt tiêu tích lũy trễ mạng LAN (`--cam-source eth --cam-url tcp://<IP>:5555`), kèm server `teleop_quest/camera_server_node.py`.
+     - **Camera USB vật lý thật (`RealSenseWristCamera`):** Giao tiếp trực tiếp Intel RealSense D435/D455 qua SDK chính thức `pyrealsense2` (`--cam-source usb --camera realsense`).
+     - **Camera mô phỏng 3D (`SyntheticWristCamera`):** Kết xuất ảnh RGB 640x480 góc nhìn Eye-in-Hand từ đầu tay máy trong không gian ảo.
 
 9. **Mô Phỏng Gắp/Thả 3D & Cơ Chế Chốt Trạng Thái (Latching):**
    - Mô phỏng cơ chế hút dính vật thể quả cà chua 3D khi ngàm tiếp cận đúng vị trí (khoảng cách 3D $< 9.5$cm hoặc lệch XY $< 5.5$cm kèm độ cao Z $< 13$cm).
@@ -96,13 +115,16 @@ Hệ thống điều khiển viễn thao thời gian thực (Real-time Teleopera
     - Quy hoạch chuyển động an toàn 2 pha qua lệnh native URScript `movej` chạy ở tần số 500Hz qua cổng Secondary Port 30002 với góc bo cung mềm mại (`blend_radius = 0.03`m).
     - Tự động kết nối lại RTDE và reset mỏ neo tay cầm VR ngay khi robot về tới Home mà không cần click bật lại checkbox thủ công.
 
-15. **Hệ Thống Rào Chắn An Toàn Đa Lớp (Safety Gate & Singularity Guard):**
-    - **Giám sát kỳ dị (Singularity Guard):** Tính toán Jacobian thời gian thực, chặn lệnh tức thì nếu giá trị suy biến nhỏ nhất $\sigma_{min} < 0.035$.
-    - **Rào chắn va chạm bàn:** Ràng buộc độ cao an toàn $Z \ge 0.035$m và góc nâng vai $\le +0.20$ rad chống đâm bàn.
-    - **Phát hiện bước nhảy góc khớp:** Chặn các bước nhảy target đột ngột (`max_jump > 1.5` rad).
-    - **Giám sát mất kết nối (Timeout Watchdog):** Tự động phát lệnh `servoStop` ngắt chuyển động nếu mất tín hiệu VR.
+15. **Hệ Thống An Toàn Đa Lớp Thời Gian Thực 20Hz (Safety Gate, 10mm Barrier & Phanh Mềm Chống Trip):**
+    - **An toàn rào chắn va chạm 10mm:** Bảo vệ ngàm kẹp và camera mount khỏi tự va chạm (Self-Collision) với độ dày áo giáp bảo vệ 10mm (hỗ trợ cờ `--disable-self-collision` để bypass trong các kịch bản test đặc biệt).
+    - **Rào chắn mặt bàn bảo vệ vật lý:** Ràng buộc độ cao an toàn $Z \ge 0.035$m và góc nâng vai $\le +0.20$ rad triệt tiêu nguy cơ chúc va mặt bàn làm việc.
+    - **Chống vượt giới hạn khớp (`JOINT LIMIT`) & Điểm kỳ dị (`SINGULARITY`):**
+      - Tinh chỉnh ngưỡng Elbow Singularity và Manipulability Metric chống kích hoạt báo lỗi giả (Anti-False Trigger) khi xoay cổ tay ở tư thế nghiêng.
+      - **Thuật toán phanh mềm 20Hz (Soft Braking & Scaled Rate Limiting):** Khi tiến sát giới hạn khớp hoặc gặp kỳ dị, hệ thống tự động co giãn tỷ lệ vận tốc và hãm tốc độ êm ái, **tuyệt đối không gọi lệnh phanh giật đột ngột `servoStop()`** trong vòng lặp teleop để tránh trip bảo vệ phần cứng (Protective Stop) của cánh tay UR3e.
+    - **Phát hiện bước nhảy góc khớp:** Chặn các bước nhảy mục tiêu bất thường (`max_jump > 1.5` rad).
+    - **Giám sát mất kết nối (Timeout Watchdog):** Tự động hãm tốc dừng an toàn nếu mất tín hiệu VR quá ngưỡng cho phép.
 
-15. **Kiến Trúc Mô-đun Hóa Tinh Gọn (Single Responsibility Architecture):**
+16. **Kiến Trúc Mô-đun Hóa Tinh Gọn (Single Responsibility Architecture):**
     - Tách biệt rõ ràng trách nhiệm từng thành phần: `teleop/pyroki_solver.py` (bộ giải CPU IK), `core/selectable_recorder.py` (lõi ghi HDF5), `core/extract_hdf5.py` (bộ giải nén), `teleop_quest/viser_ui.py` (giao diện web) và `teleop_quest/camera_driver.py` (driver camera).
 
 ---
@@ -243,6 +265,11 @@ pip install -r requirements.txt
 ```text
 ur_ws/pyroki_ursim/
 ├── main.py                          # Điểm khởi chạy CLI thống nhất của hệ thống
+├── build_zip.sh                     # Script tự động đóng gói dự án thành Teleop_Quest_Project.zip
+├── Dockerfile                       # Image Docker Python 3.11-slim (CPU PyRoki, OpenCV, ZMQ, RTDE)
+├── docker-compose.yml               # Cấu hình triển khai Zero-Setup với network_mode: host
+├── .env.example                     # File mẫu biến môi trường cấu hình IP Robot và Camera
+├── HUONG_DAN_CHAY.md                # Hướng dẫn 3 bước khởi chạy nhanh bằng Docker
 ├── README.md                        # Tài liệu hướng dẫn sử dụng toàn diện
 ├── requirements.txt                 # Danh sách gói phụ thuộc Python
 ├── reset_home.py                    # Script hỗ trợ khẩn cấp đưa robot về Home
@@ -280,15 +307,16 @@ ur_ws/pyroki_ursim/
 │   ├── __init__.py                  # Khởi tạo package Quest teleop
 │   ├── bootstrap.py                 # Điều phối khởi động (Docker URSim, ADB, SSL)
 │   ├── camera_pipeline.py           # Quản lý luồng nền camera, preview OSD & streaming
-│   ├── camera_driver.py             # Driver camera hợp nhất với đồng bộ hardware timestamp
-│   ├── camera_server_node.py        # Node phát stream video camera qua Ethernet (ZMQ / HTTP)
+│   ├── camera_driver.py             # Driver camera hợp nhất (USB, WebSocket RFC 6455 & ZeroMQ)
+│   ├── camera_server_node.py        # Node phát stream video camera qua Ethernet ZeroMQ
+│   ├── websocket_camera_server.py   # Node phát stream video camera qua mạng WebSocket (RFC 6455)
 │   ├── synthetic_camera.py          # Render camera ảo cổ tay 640x480 (Eye-in-Hand)
 │   ├── viser_ui.py                  # Giao diện Viser UI tinh gọn (Lưới 2 cột, 100% tiếng Anh)
 │   ├── grasp_simulator.py           # Mô phỏng gắp/thả quả cà chua 3D vào giỏ
 │   ├── quest_server.py              # Server HTTPS (8443) và WSS (8444)
 │   ├── network_utils.py             # Dò tìm IP LAN và tự sinh chứng chỉ SSL
 │   ├── pose_sources.py              # WidgetPoseSource đọc tọa độ chuột có lọc EMA
-│   ├── delta_pose_source.py         # Cơ chế Mặt Đồng Hồ, nút B hiệu chuẩn bàn máy
+│   ├── delta_pose_source.py         # Cơ chế Mặt Đồng Hồ, Posture-Invariant Hand Frame & Deadzone
 │   ├── timeout_watchdog.py          # Watchdog ngắt khẩn cấp khi mất tín hiệu
 │   ├── home_planner.py              # Đưa robot về Home an toàn 2 pha (500Hz movej)
 │   ├── profiler.py                  # Đo đạc vi độ trễ và xuất báo cáo hiệu năng mỗi 100 frames
@@ -305,9 +333,16 @@ ur_ws/pyroki_ursim/
     ├── test_vr_key_integration.py   # Kiểm thử phân tách phím vật lý VR A/X
     ├── test_vr_record_and_ui.py     # Kiểm thử Viser UI Checkbox và HDF5 streaming
     ├── test_realsense.py            # Kiểm thử SDK camera Intel RealSense
-    ├── test_dual_camera.py          # Kiểm thử hệ thống camera đa phương thức
+    ├── test_dual_camera.py          # Kiểm thử hệ thống camera đa phương thức (USB & Ethernet ZMQ)
+    ├── test_websocket_camera.py     # Kiểm thử luồng camera qua mạng WebSocket (RFC 6455)
+    ├── test_webxr_reconnect_and_occlusion.py # Kiểm thử khôi phục kết nối WebXR và góc khuất tay cầm
+    ├── test_cockpit_joint_control.py# Kiểm thử điều khiển khớp 6-DoF trực tiếp trên Cockpit WebXR
+    ├── test_collision_visualization.py # Kiểm thử hiển thị ranh giới va chạm 3D
+    ├── test_joint_limits.py         # Kiểm thử giới hạn góc khớp và phanh mềm 20Hz
+    ├── test_multi_layer_safety.py   # Kiểm thử hệ thống rào chắn an toàn đa lớp
     ├── test_simulated_pick_and_place.py # Kiểm thử chu trình gắp thả mô phỏng
     ├── test_singularity_guard.py    # Kiểm thử Jacobian singularity metric
+    ├── test_camera.py               # Kiểm thử driver camera cơ sở
     └── test_viser_ui_layout.py      # Kiểm thử bố cục giao diện Viser UI
 ```
 
@@ -315,13 +350,20 @@ ur_ws/pyroki_ursim/
 
 ## 5. Hướng Dẫn Vận Hành
 
-### Bước 1: Khởi động hệ thống
-Bạn chỉ cần thực thi một lệnh duy nhất. Hệ thống sẽ tự động kiểm tra và khởi động container Docker URSim nếu đang chạy mô phỏng cục bộ:
+### Bước 1: Kích Hoạt Môi Trường Trên Máy Mới (Chỉ Gõ 1 Lệnh - 100% Offline)
+Người dùng trên máy tính mới **không cần cài đặt bất kỳ thư viện nào** (không cần pip, venv hay conda). Chỉ cần mở Terminal tại thư mục dự án và chạy:
 
 ```bash
-cd /home/nguyen/ur_ws/pyroki_ursim
-source .venv/bin/activate
+source activate_env.sh
+```
+*(Nếu là lần đầu chạy trên máy mới, script sẽ tự động nạp file ảnh Docker Offline `teleop_quest_offline.tar` trong vài giây và thiết lập alias lệnh `python`. Bạn cũng có thể vào thẳng shell bên trong Docker bằng cách gõ `./activate_env.sh`).*
 
+---
+
+### Bước 2: Chạy Chương Trình (Gõ Lệnh `python` Y Hệt Máy Thật)
+Sau khi kích hoạt môi trường ở Bước 1, bạn có thể copy-paste trực tiếp toàn bộ các câu lệnh điều khiển bên dưới:
+
+```bash
 # 1. Chạy với URSim mô phỏng (Camera ảo 3D - Mặc định tự bật Docker):
 python main.py --robot sim
 
@@ -334,16 +376,53 @@ python main.py --robot real --robot-ip 10.42.0.242
 # 3. Chạy CẢ HAI: Robot UR3e thật + Camera Intel RealSense cắm cáp USB (Cấu hình chuẩn phòng Lab):
 python main.py --robot real --robot-ip 10.42.0.242 --cam-source usb --camera realsense
 
-# 4. Chạy CẢ HAI: Robot UR3e thật + Camera qua cáp mạng Ethernet (ZMQ Zero-Lag):
-python main.py --robot real --robot-ip 10.42.0.242 --cam-source eth --cam-url tcp://192.168.1.100:5555
+# 4. Chạy CẢ HAI: Robot UR3e thật + Camera qua luồng mạng WebSocket (Khuyến nghị chuẩn mới):
+python main.py --robot real --robot-ip 10.42.0.242 --cam-source ws --cam-url ws://127.0.0.1:8765
+# (Trên máy phát chạy: python teleop_quest/websocket_camera_server.py --camera realsense --port 8765 --fps 30)
+
+# 5. Chạy CẢ HAI: Robot UR3e thật + Camera qua cáp mạng Ethernet (ZeroMQ Zero-Lag):
+python main.py --robot real --robot-ip 10.42.0.242 --cam-source eth --cam-url tcp://127.0.0.1:5555
+# (Trên máy phát chạy: python teleop_quest/camera_server_node.py --camera realsense --port 5555 --fps 30)
 ```
 
-Các cổng truy cập dịch vụ:
-- **Viser 3D Dashboard:** `http://localhost:8080`
-- **WebXR Quest (Wi-Fi):** `https://<IP_LAN>:8443`
-- **WebXR Quest (Cáp USB ADB Reverse):** `https://localhost:8443`
-- **Cổng WebSocket WebXR:** `wss://<IP_LAN>:8444`
-- **Giao diện URSim PolyScope (noVNC):** `http://localhost:6080` (hoặc `http://192.168.56.101:6080/vnc.html`)
+*(Tùy chọn: Nếu muốn chạy ngầm toàn bộ dịch vụ qua Docker Compose, bạn chỉ cần gõ: `docker compose up -d` và tắt bằng: `docker compose down`).*
+
+---
+
+### Bước 3: Mở Các Đường Dẫn Giao Diện (Localhost & VR)
+Sau khi lệnh `python main.py ...` khởi động, toàn bộ dịch vụ mạng nội bộ sẽ lắng nghe trực tiếp trên máy của bạn:
+
+1. **Trên Trình Duyệt Máy Tính:**
+   - **Giao diện 3D Viser Dashboard:** [http://localhost:8080](http://localhost:8080) (Điều khiển 3D Gizmo bằng chuột, bật/tắt Teleop, ghi dữ liệu HDF5).
+   - **Giao diện WebXR Cockpit:** [https://localhost:8443](https://localhost:8443)
+   - **Giao diện URSim PolyScope (noVNC):** [http://localhost:6080](http://localhost:6080)
+
+2. **Trên Kính Thực Tế Ảo Meta Quest (Meta Quest Browser):**
+   - **Cách 1 - Cắm Cáp USB Type-C (Khuyến nghị - Tốc độ cao & Zero Lag):**
+     - Cắm cáp USB nối kính Quest với máy tính.
+     - Nếu Terminal xuất hiện dòng cảnh báo màu vàng:
+       `⚠️  [QUEST USB] Phát hiện kính Quest nhưng CHƯA CẤP QUYỀN! Hãy đeo kính lên và bấm 'Allow USB Debugging'!`
+       -> Đeo kính lên mắt, chọn **"Always allow from this computer"** rồi bấm **"Allow" (Cho phép)**.
+     - Chờ dòng thông báo màu xanh lá hiện ra trên Terminal:
+       `✅ [QUEST USB] Đã kết nối cáp USB thành công! Mở trình duyệt trên Quest và vào ngay: https://localhost:8443`
+     - Mở Meta Quest Browser trên kính và truy cập: **`https://localhost:8443`** *(vào được ngay lập tức)*.
+   - **Cách 2 - Dùng Wi-Fi cùng mạng LAN với máy tính:**
+     - Mở Meta Quest Browser trên kính và truy cập: **`https://<IP_LAN_in_trên_terminal>:8443`** (ví dụ: `https://192.168.1.15:8443`).
+
+3. **Vượt Qua Cảnh Báo SSL Tự Ký Trên Trình Duyệt (Chỉ làm 1 lần đầu):**
+   - WebXR yêu cầu bảo mật HTTPS. Vì chứng chỉ được hệ thống tự sinh nội bộ, trình duyệt sẽ hiện *"Your connection is not private"* (Kết nối không riêng tư).
+   - Bạn chỉ cần bấm vào **Advanced (Nâng cao)** -> Chọn **Proceed to localhost (Tiếp tục truy cập)**.
+   - Bấm nút **"Enter VR"** màu xanh để vào không gian điều khiển robot!
+
+---
+
+### Bước 4: Tùy Chỉnh Cấu Hình Trong File `.env` (Nếu Cần)
+Nếu dải IP của Robot hoặc Camera trong phòng Lab của bạn thay đổi, chỉ cần mở file `.env` và sửa:
+```bash
+ROBOT_IP=10.42.0.242           # Địa chỉ IP của Robot UR3e
+CAM_URL=tcp://10.42.0.100:5555  # URL nhận luồng video camera qua mạng
+```
+
 
 ---
 
@@ -402,15 +481,26 @@ Khi cần điều khiển robot di chuyển quãng đường dài vượt quá s
 3. Rút tay cầm về gần ngực hoặc vị trí thoải mái nhất.
 4. **Bấm giữ lại Cò trỏ:** Hệ thống tự động neo mốc mới (Reset Anchor). Robot tiếp tục tiến tới mượt mà, hoàn toàn không bị nhảy vọt tọa độ (Zero Teleport).
 
-#### 3.4. Kết Nối Kính Meta Quest Qua Cáp USB (ADB Reverse)
+#### 3.4. Kết Nối Kính Meta Quest Qua Cáp USB (Cơ Chế Auto-Heal ADB USB)
 Để đạt độ trễ thấp nhất và triệt tiêu giật lag do sóng Wi-Fi:
 1. Cắm cáp USB-C 3.0 giữa PC và kính Meta Quest.
-2. Tiến trình ngầm `start_adb_watcher` tự động nhận diện kính và chuyển tiếp toàn bộ cổng.
-3. Mở trình duyệt Meta Quest Browser trên kính và truy cập:
+2. Hệ thống chạy tiến trình ngầm **Auto-Heal ADB USB Daemon** liên tục mỗi 2.5 giây.
+3. Nếu Terminal hiện cảnh báo màu vàng:
+   ```text
+   ⚠️  [QUEST USB] Phát hiện kính Quest nhưng CHƯA CẤP QUYỀN! Hãy đeo kính lên và bấm 'Allow USB Debugging'!
+   ```
+   $\rightarrow$ Đeo kính lên mắt, tích chọn **"Always allow from this computer"** rồi bấm **"Allow" (Cho phép)**.
+4. Chờ dòng thông báo màu xanh lá xuất hiện trên Terminal:
+   ```text
+   ✅ [QUEST USB] Đã kết nối cáp USB thành công! Mở trình duyệt trên Quest và vào ngay: https://localhost:8443
+   ```
+5. Mở trình duyệt Meta Quest Browser trên kính và truy cập:
    ```text
    https://localhost:8443
    ```
-4. Bấm **Advanced** $\rightarrow$ **Proceed to localhost** $\rightarrow$ Bấm **Enter VR** để bắt đầu điều khiển.
+6. Bấm **Advanced** $\rightarrow$ **Proceed to localhost** $\rightarrow$ Bấm **Enter VR** để bắt đầu điều khiển.
+
+*(Lưu ý: Kể cả khi người dùng bấm Allow muộn, hay đang chạy mà bị tuột dây USB cắm lại, hệ thống sẽ tự động khôi phục kết nối trong vòng 2 giây mà không cần khởi động lại chương trình!)*
 
 ---
 
@@ -496,6 +586,9 @@ python tests/test_realsense.py --gui
 
 # Kiểm tra hệ thống camera đa phương thức (USB & Ethernet)
 python tests/test_dual_camera.py
+
+# Kiểm tra luồng WebSocket Camera (Client/Server)
+python tests/test_websocket_camera.py
 ```
 
 ---
@@ -662,3 +755,29 @@ pytest tests/test_extract_hdf5.py tests/test_visualize_data.py tests/test_vr_rec
 | **Độ lệch thời gian phần cứng** | $< 1.5$ ms | RealSense ASIC chip hardware timestamp đồng pha với RTDE controller clock. |
 | **Tốc độ trích xuất HDF5** | $> 500$ steps/s | Giải nén siêu tốc sang video MP4, ảnh PNG 16-bit và file CSV ngữ nghĩa. |
 | **Tiến trình ADB Forwarding Watcher** | Chu kỳ quét 2.5 s | Tự động thiết lập đường hầm USB reverse cho WebXR khi cắm cáp. |
+
+---
+
+## 9. Tự Động Đóng Gói Dự Án (Build Script)
+
+Hệ thống tích hợp sẵn script tự động hóa [`build_zip.sh`](file:///home/nguyen/ur_ws/pyroki_ursim/build_zip.sh) để đóng gói toàn bộ dự án thành file `Teleop_Quest_Project.zip` gửi cho đối tác hoặc triển khai sang máy tính mới:
+- **Tự động xuất Docker Image sẵn (`teleop_quest_image.tar`):** Đóng gói toàn bộ Image Linux + Python 3.11 + PyRoki + Torch CPU để người nhận có thể chạy 100% Offline mà không phải chờ tải mạng 1-3 phút.
+- **Giữ lại file `.env`:** Bảo lưu cấu hình địa chỉ IP Robot (`ROBOT_IP`) và Camera (`CAM_URL`) hiện tại để người nhận có thể chạy ngay lập tức mà không cần sửa cấu hình.
+- **Loại trừ rác & môi trường ảo nặng:** Tự động loại bỏ `.venv/`, `venv/`, `.git/`, `__pycache__/`, `*.pyc`, `*.log`.
+- **Tự động làm sạch:** Xóa file zip cũ trước khi nén để tránh xung đột dung lượng.
+
+### Lệnh thực thi:
+Bất cứ khi nào bạn cập nhật code và muốn xuất file zip đóng gói mới:
+
+```bash
+./build_zip.sh
+```
+
+Người nhận chỉ cần giải nén file `Teleop_Quest_Project.zip` và xem hướng dẫn tại [`HUONG_DAN_CHAY.md`](file:///home/nguyen/ur_ws/pyroki_ursim/HUONG_DAN_CHAY.md):
+```bash
+# 1. Nạp image (chỉ 1 lần trên máy mới - mất 2 giây):
+docker load -i teleop_quest_image.tar
+
+# 2. Khởi chạy (chạy tức thì trong 1 giây):
+docker compose up -d
+```

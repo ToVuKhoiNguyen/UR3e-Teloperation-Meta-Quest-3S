@@ -68,10 +68,21 @@ def get_ethernet_subnets() -> List[Tuple[str, ipaddress.IPv4Network]]:
     except Exception:
         pass
 
-    # Nếu không tìm thấy, bổ sung subnet mặc định 10.42.0.0/24
+    # Nếu không tìm thấy, bổ sung subnet mặc định 10.42.0.0/24 với interface mạng khả dụng đầu tiên
     if not subnets:
-        subnets.append(("enp109s0", ipaddress.IPv4Network("10.42.0.0/24", strict=False)))
+        fallback_dev = "eth0"
+        try:
+            active_devs = [
+                dev for dev in os.listdir("/sys/class/net")
+                if not dev.startswith(("lo", "docker", "br-", "veth"))
+            ]
+            if active_devs:
+                fallback_dev = active_devs[0]
+        except Exception:
+            pass
+        subnets.append((fallback_dev, ipaddress.IPv4Network("10.42.0.0/24", strict=False)))
     return subnets
+
 
 
 def check_arp_table() -> Optional[str]:
