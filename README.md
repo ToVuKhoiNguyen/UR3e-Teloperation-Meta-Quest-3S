@@ -121,6 +121,7 @@ ur_ws/pyroki_ursim/
 ├── README.md                        # Tài liệu hướng dẫn sử dụng toàn diện
 ├── requirements.txt                 # Danh sách gói phụ thuộc Python (Top-level)
 ├── requirements.lock.txt            # Danh sách gói phụ thuộc khóa cứng (Pinned Docker)
+├── reset_home.py                    # Script hỗ trợ khẩn cấp đưa robot về Home
 ├── assets/
 │   ├── architecture.drawio          # Sơ đồ thiết kế kiến trúc toàn diện hệ thống
 │   ├── ur3e_custom.urdf             # URDF UR3e có ngàm kẹp và camera offset
@@ -132,7 +133,6 @@ ur_ws/pyroki_ursim/
 ├── config/
 │   └── singularity.yaml             # Ngưỡng an toàn Jacobian singularity (sigma_min)
 ├── core/
-│   ├── reset_home.py                # Script hỗ trợ khẩn cấp đưa robot về Home
 │   ├── selectable_recorder.py       # Bộ ghi dữ liệu HDF5 dạng luồng phân mảnh
 │   ├── extract_hdf5.py              # Công cụ giải nén HDF5 sang MP4, PNG 16-bit và CSV
 │   ├── visualize_data.py            # Phân tích và trực quan hóa dữ liệu đa phương thức HDF5 (2x2 plots)

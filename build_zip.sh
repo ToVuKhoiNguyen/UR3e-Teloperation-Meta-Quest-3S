@@ -29,7 +29,7 @@ cp -v "$PROJECT_DIR/activate_env.sh" "$DIST_DIR/"
 cp -v "$PROJECT_DIR/Dockerfile" "$DIST_DIR/"
 cp -v "$PROJECT_DIR/main.py" "$DIST_DIR/"
 cp -v "$PROJECT_DIR/README.md" "$DIST_DIR/"
-[ -f "$PROJECT_DIR/reset_home.py" ] && cp -v "$PROJECT_DIR/reset_home.py" "$DIST_DIR/" || true
+cp -v "$PROJECT_DIR/reset_home.py" "$DIST_DIR/"
 cp -v "$PROJECT_DIR/.env.example" "$DIST_DIR/"
 [ -f "$PROJECT_DIR/.env" ] && cp -v "$PROJECT_DIR/.env" "$DIST_DIR/"
 cp -v "$PROJECT_DIR/.dockerignore" "$DIST_DIR/"
