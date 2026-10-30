@@ -104,8 +104,8 @@ def start_adb_watcher(ports=(8443, 8444, 8445, 8080)):
                     is_reversed = False
                     now = time.time()
                     if now - last_warn_t >= 5.0:
-                        print("\n\033[93;1m⚠️  [QUEST USB] Phát hiện kính Quest nhưng CHƯA CẤP QUYỀN! Hãy đeo kính lên và bấm 'Allow USB Debugging' (Cho phép gỡ lỗi USB)!\033[0m")
-                        print("\033[93m   -> Mẹo: Tích vào 'Always allow from this computer' và bấm 'Allow' trên màn hình kính!\033[0m\n")
+                        print("\n\033[93;1m[WARN] [QUEST USB] Phat hien kinh Quest nhung CHUA CAP QUYEN! Hay deo kinh len va bam 'Allow USB Debugging' (Cho phep go loi USB)!\033[0m")
+                        print("\033[93m   -> Meo: Tich vao 'Always allow from this computer' va bam 'Allow' tren man hinh kinh!\033[0m\n")
                         last_warn_t = now
 
                 # Trường hợp 3 (Đã kết nối - <serial>\tdevice):
@@ -133,8 +133,8 @@ def start_adb_watcher(ports=(8443, 8444, 8445, 8080)):
                                 local_ip = "127.0.0.1"
 
                             print("\n\033[92;1m" + "=" * 70 + "\033[0m")
-                            print(f"\033[92;1m✅ [QUEST USB] Đã kết nối cáp USB thành công! Mở trình duyệt trên Quest và vào ngay: https://localhost:8443 (hoặc qua Wi-Fi: https://{local_ip}:8443)\033[0m")
-                            print("   👉 3D Viser Dashboard: http://localhost:8080")
+                            print(f"\033[92;1m[OK] [QUEST USB] Da ket noi cap USB thanh cong! Mo trinh duyet tren Quest va vao ngay: https://localhost:8443 (hoac qua Wi-Fi: https://{local_ip}:8443)\033[0m")
+                            print("   - 3D Viser Dashboard: http://localhost:8080")
                             print("\033[92;1m" + "=" * 70 + "\033[0m\n")
 
             except Exception:
@@ -167,23 +167,23 @@ def print_startup_banner(local_ip: str, quest_port: int = 8443, viser_port: int 
     """In thông tin địa chỉ truy cập hệ thống trực quan và có thể click trực tiếp"""
     ursim_ip = get_ursim_ip()
     print("\n" + "=" * 68)
-    print("  🚀 HỆ THỐNG TELEOP QUEST ĐÃ KHỞI CHẠY THÀNH CÔNG!")
+    print("  [SYSTEM] HE THONG TELEOP QUEST DA KHOI CHAY THANH CONG")
     print("=" * 68)
     print(f"  [1] Giao diện 3D Viser Dashboard (Máy tính):")
-    print(f"      👉 http://localhost:{viser_port}")
+    print(f"      - http://localhost:{viser_port}")
     print()
     print(f"  [2] Giao diện WebXR Cockpit (Trên máy tính hoặc Quest cắm cáp USB):")
-    print(f"      👉 https://localhost:{quest_port}")
+    print(f"      - https://localhost:{quest_port}")
     if local_ip not in ("127.0.0.1", "localhost"):
         print()
         print(f"  [3] Giao diện WebXR Cockpit (Kính Quest qua Wi-Fi mạng LAN):")
-        print(f"      👉 https://{local_ip}:{quest_port}")
+        print(f"      - https://{local_ip}:{quest_port}")
     print()
     print(f"  [4] PolyScope URSim Robot Simulator (noVNC):")
-    print(f"      👉 http://localhost:{ursim_port}/vnc.html (hoặc http://{ursim_ip}:{ursim_port}/vnc.html)")
+    print(f"      - http://localhost:{ursim_port}/vnc.html (hoặc http://{ursim_ip}:{ursim_port}/vnc.html)")
     print()
-    print("  🔒 Cảnh báo SSL: Khi vào lần đầu, bấm 'Nâng cao / Advanced' -> 'Tiếp tục truy cập / Proceed'")
-    print("  🔥 Tường lửa (Firewall): Nếu máy mới chặn cổng 8443/8080, hãy mở port:")
+    print("  [SSL Warning]: Khi vào lần đầu, bấm 'Nâng cao / Advanced' -> 'Tiếp tục truy cập / Proceed'")
+    print("  [Firewall]: Nếu máy chặn cổng 8443/8080, hãy mở port:")
     print("      sudo ufw allow 8443/tcp 8080/tcp 8444/tcp 8445/tcp")
     print("=" * 68 + "\n")
 

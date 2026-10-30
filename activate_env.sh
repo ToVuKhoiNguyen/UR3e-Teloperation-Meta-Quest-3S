@@ -35,26 +35,26 @@ elif [ ! -f "$TAR_FILE" ]; then
 fi
 
 echo "======================================================================"
-echo "  🚀 KÍCH HOẠT MÔI TRƯỜNG DOCKER UR3e TELEOPERATION"
+echo "  [SETUP] KICH HOAT MOI TRUONG DOCKER UR3e TELEOPERATION"
 echo "======================================================================"
 
 # 1. Kiểm tra Docker daemon
 if ! command -v docker &> /dev/null; then
-    echo "❌ LỖI: Máy tính chưa cài đặt Docker! Vui lòng cài đặt Docker trước:"
+    echo "[ERROR] Máy tính chưa cài đặt Docker! Vui lòng cài đặt Docker trước:"
     echo "   sudo apt update && sudo apt install -y docker.io docker-compose-v2"
     echo "   sudo usermod -aG docker \$USER && newgrp docker"
     return 1 2>/dev/null || exit 1
 fi
 
 if ! docker info > /dev/null 2>&1; then
-    echo "⚠️  CẢNH BÁO: Docker daemon chưa chạy hoặc chưa cấp quyền cho user hiện tại."
+    echo "[WARN] Docker daemon chưa chạy hoặc chưa cấp quyền cho user hiện tại."
     echo "   Thử chạy: sudo systemctl start docker"
 fi
 
 # 2. Kiểm tra và tự động nạp Docker Image nếu chưa có
 if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1 && ! docker image inspect "$FALLBACK_IMAGE" > /dev/null 2>&1; then
     if [ -f "$TAR_FILE" ]; then
-        echo "📦 Phát hiện lần đầu chạy trên máy mới. Đang nạp Docker Image từ file:"
+        echo "[INFO] Phát hiện lần đầu chạy trên máy mới. Đang nạp Docker Image từ file:"
         echo "   -> $TAR_FILE"
         echo "   (Quá trình này mất khoảng 5-10 giây)..."
         docker load -i "$TAR_FILE"
@@ -64,12 +64,12 @@ if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1 && ! docker image inspe
             docker tag "$LOADED_IMG" "$IMAGE_NAME" 2>/dev/null || true
             docker tag "$LOADED_IMG" "$FALLBACK_IMAGE" 2>/dev/null || true
         fi
-        echo "✅ Nạp Docker Image thành công!"
+        echo "[OK] Nạp Docker Image thành công!"
     else
-        echo "⚠️  Không tìm thấy file ảnh $TAR_FILE."
+        echo "[WARN] Không tìm thấy file ảnh $TAR_FILE."
         echo "   Đang kiểm tra Docker image cục bộ..."
         if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
-            echo "🔨 Đang tiến hành build image từ Dockerfile..."
+            echo "[BUILD] Đang tiến hành build image từ Dockerfile..."
             docker build -t "$IMAGE_NAME" "$PROJECT_DIR"
             docker tag "$IMAGE_NAME" "$FALLBACK_IMAGE" 2>/dev/null || true
         fi
@@ -79,11 +79,11 @@ else
     if docker image inspect "$FALLBACK_IMAGE" > /dev/null 2>&1 && ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
         docker tag "$FALLBACK_IMAGE" "$IMAGE_NAME" 2>/dev/null || true
     fi
-    echo "✅ Docker Image '$IMAGE_NAME' đã sẵn sàng!"
+    echo "[OK] Docker Image '$IMAGE_NAME' đã sẵn sàng!"
 fi
 
 # 1. Dọn dẹp môi trường, giải phóng cổng và chuẩn bị firewall trên máy Host
-echo "🧹 Đang dọn dẹp các tiến trình cũ và giải phóng cổng kết nối..."
+echo "[CLEANUP] Đang dọn dẹp các tiến trình cũ và giải phóng cổng kết nối..."
 docker stop $(docker ps -q --filter ancestor=ur3e_teleoperation:latest --filter ancestor=ur33_teleoperation:latest --filter ancestor=teleop_quest:offline) 2>/dev/null || true
 fuser -k 8080/tcp 8081/tcp 8443/tcp 8444/tcp 8445/tcp 2>/dev/null || true
 
@@ -103,7 +103,7 @@ mkdir -p "$PROJECT_DIR/.adb_keys"
 
 if [ ! -f "$PROJECT_DIR/.env" ]; then
     if [ -f "$PROJECT_DIR/.env.example" ]; then
-        echo "📝 Chưa có file .env, tự động tạo từ .env.example..."
+        echo "[CONFIG] Chưa có file .env, tự động tạo từ .env.example..."
         cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
     else
         touch "$PROJECT_DIR/.env"
@@ -157,11 +157,11 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 
 
     echo "======================================================================"
-    echo "🎉 MÔI TRƯỜNG ĐÃ ĐƯỢC KÍCH HOẠT THÀNH CÔNG!"
-    echo "👉 BƯỚC TIẾP THEO: Hãy gõ lệnh khởi chạy hệ thống (ví dụ):"
+    echo "[SUCCESS] MOI TRUONG DA DUOC KICH HOAT THANH CONG!"
+    echo "[NEXT] BUOC TIEP THEO: Hãy gõ lệnh khởi chạy hệ thống (ví dụ):"
     echo "   python main.py --robot sim"
     echo ""
-    echo "⚠️  LƯU Ý QUAN TRỌNG: Bạn PHẢI gõ lệnh 'python main.py ...' ở trên trước."
+    echo "[NOTE] LƯU Ý QUAN TRỌNG: Bạn PHẢI gõ lệnh 'python main.py ...' ở trên trước."
     echo "   Khi màn hình hiện thông báo 'HỆ THỐNG ĐÃ KHỞI CHẠY THÀNH CÔNG',"
     echo "   lúc đó bạn mới mở trình duyệt vào các đường link sau:"
     echo "   - 3D Viser Dashboard (Máy tính):    http://localhost:8080"
@@ -170,8 +170,8 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     echo "======================================================================"
 else
     # Trường hợp chạy trực tiếp: ./activate_env.sh
-    echo "💡 Bạn đang chạy trực tiếp './activate_env.sh'."
-    echo "👉 Đang mở shell tương tác bên trong container (gõ 'exit' để thoát)..."
+    echo "[INFO] Bạn đang chạy trực tiếp './activate_env.sh'."
+    echo "[INFO] Đang mở shell tương tác bên trong container (gõ 'exit' để thoát)..."
     echo "   (Mẹo: Dùng 'source activate_env.sh' để gõ trực tiếp lệnh ngoài host)."
     echo ""
     exec $DOCKER_CMD bash

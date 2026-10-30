@@ -12,3 +12,4 @@ scratch/
 dist_package/
 .env
 .adb_keys/
+.vscode/

@@ -325,10 +325,10 @@ class ServoJExecutor:
             else:
                 print(f"[CRITICAL] Không thể kết nối tới Robot tại IP {robot_ip}!")
                 print(f"[CRITICAL] Cả RTDE (Port 30004) và Secondary Interface (Port 30002) đều không phản hồi.")
-                print(f"[CRITICAL] Hướng dẫn khắc phục:")
-                print(f"   👉 Bước 1: Mở terminal mới gõ: ping {robot_ip}")
-                print(f"   👉 Bước 2: Kiểm tra Robot thật / URSim đã khởi động và cấp nguồn chưa.")
-                print(f"   👉 Bước 3: Nếu dùng URSim, chạy: docker start ursim (hoặc docker ps)")
+                print(f"[CRITICAL] Huong dan khac phuc:")
+                print(f"   - Buoc 1: Mo terminal moi go: ping {robot_ip}")
+                print(f"   - Buoc 2: Kiem tra Robot that / URSim da khoi dong va cap nguon chua.")
+                print(f"   - Buoc 3: Neu dung URSim, chay: docker start ursim (hoac docker ps)")
 
     def disconnect(self):
         """Stop servoJ and disconnect."""

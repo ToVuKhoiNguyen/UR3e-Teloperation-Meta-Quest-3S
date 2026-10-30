@@ -480,12 +480,12 @@ def main():
         p_dash = _quick_probe(args.robot_ip, 29999)
 
         print("\n" + "=" * 68)
-        print(f"  📡 KIỂM TRA ĐƯỜNG TRUYỀN MẠNG ROBOT ({args.robot_ip})")
+        print(f"  [NET] KIEM TRA DUONG TRUYEN MANG ROBOT ({args.robot_ip})")
         print("=" * 68)
-        print(f"  [+] Ping ICMP ({args.robot_ip}):           {'✅ THÀNH CÔNG' if ping_ok else '❌ KHÔNG PHẢN HỒI (Ping timeout)'}")
-        print(f"  [+] Cổng RTDE 30004 (Điều khiển 125Hz):  {'✅ ĐÃ MỞ (Sẵn sàng)' if p_rtde else '❌ ĐÓNG / BỊ CHẶN'}")
-        print(f"  [+] Cổng Secondary 30002 (URScript):     {'✅ ĐÃ MỞ (Sẵn sàng)' if p_sec else '❌ ĐÓNG / BỊ CHẶN'}")
-        print(f"  [+] Cổng Dashboard 29999 (PolyScope):    {'✅ ĐÃ MỞ (Sẵn sàng)' if p_dash else '❌ ĐÓNG / BỊ CHẶN'}")
+        print(f"  [+] Ping ICMP ({args.robot_ip}):           {'[SUCCESS]' if ping_ok else '[TIMEOUT] (Ping timeout)'}")
+        print(f"  [+] Cổng RTDE 30004 (Điều khiển 125Hz):  {'[OPEN] (San sang)' if p_rtde else '[CLOSED] (Bi chan)'}")
+        print(f"  [+] Cổng Secondary 30002 (URScript):     {'[OPEN] (San sang)' if p_sec else '[CLOSED] (Bi chan)'}")
+        print(f"  [+] Cổng Dashboard 29999 (PolyScope):    {'[OPEN] (San sang)' if p_dash else '[CLOSED] (Bi chan)'}")
 
         if not (ping_ok or p_rtde or p_sec or p_dash):
             # Kiểm tra card mạng máy tính có dải IP tương ứng không (vd: 10.42.0.x)
@@ -494,9 +494,9 @@ def main():
                 ip_out = subprocess.check_output(["ip", "-4", "addr", "show"], stderr=subprocess.DEVNULL).decode()
                 has_matching_subnet = ip_prefix in ip_out
                 if not has_matching_subnet:
-                    print("\n  ⚠️  CHẨN ĐOÁN NGUYÊN NHÂN MẤT KẾT NỐI:")
+                    print("\n  [WARN] CHAN DOAN NGUYEN NHAN MAT KET NOI:")
                     print(f"     Card mạng máy tính CHƯA CÓ IP cùng dải mạng '{ip_prefix}.x' với Robot!")
-                    print(f"     👉 Hãy gán IP tĩnh cho card mạng Ethernet trên máy tính (ví dụ: {ip_prefix}.1):")
+                    print(f"     - Hãy gán IP tĩnh cho card mạng Ethernet trên máy tính (ví dụ: {ip_prefix}.1):")
                     print(f"        sudo ip addr add {ip_prefix}.1/24 dev <tên_card_mạng_ethernet>")
                     print("        (Hoặc vào Settings -> Network -> Wired -> IPv4: chọn Manual, gán IP tương ứng).")
             except Exception:
@@ -559,7 +559,7 @@ def main():
                 args.robot_ip = "127.0.0.1"
                 os.environ["ROBOT_IP"] = "127.0.0.1"
                 is_real_robot = False
-                print(f"[Auto-Detect Fallback] ✅ Kết nối URSim 127.0.0.1 THÀNH CÔNG!")
+                print(f"[Auto-Detect Fallback] [SUCCESS] Ket noi URSim 127.0.0.1 THANH CONG!")
             except Exception:
                 ctrl = None
         if ctrl is None:
