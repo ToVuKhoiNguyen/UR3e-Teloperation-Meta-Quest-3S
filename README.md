@@ -11,7 +11,7 @@ Hệ thống điều khiển teleoperation thời gian thực và thu thập d�
    - **Điều hướng Mặt Đồng Hồ cơ học (True Mechanical Clock):** Phải/Trái quay quanh trục Z đế ($q_0$) kèm tự bù ngàm kẹp; Tiến/Lùi vươn co bắp tay theo $\vec{u}_{reach} = [\cos(q_0), \sin(q_0), 0.0]$; Cao/Thấp theo phương Z thẳng đứng. Tổ hợp **Grip + Nút B** hiệu chuẩn tức thì hệ quy chiếu vuông góc bàn máy.
    - **Phân tách cử động độc lập:** Cò trỏ (Trigger) tịnh tiến thuần túy (khóa góc xoay); Cò giữa (Grip) xoay cổ tay bất biến tư thế (Horizon-Stabilized Triad: Lắc Z, Ngửa/Chúc Pitch, Vặn chìa khóa Roll). Bộ lọc vi rung sinh học (`rot_deadband = 0.026` rad $\approx 1.5^\circ$, `pos_deadband = 3`mm, `lat_deadband = 3.5`mm, `fwd_deadband = 1.5`mm).
    - **Khóa trục xoay thông minh (Soft Rotation Snapping):** Tỷ lệ xoay phụ $< 30\%$ (`snap_ratio = 0.30`) khóa cứng 1 trục; $30\% - 60\%$ (`smooth_high = 0.60`) chuyển tiếp mượt Hermite Smoothstep; $> 60\%$ xoay 3D tự do.
-   - **Smart Clutching & Về Home 2 pha an toàn:** Tự động chốt mỏ neo tọa độ mới chống nhảy vọt (Zero Teleport). Quy hoạch về Home 2 pha 500Hz URScript qua Secondary Port 30002 bo cung $\text{blend} = 0.03$m, tự động kết nối lại RTDE mượt mà.
+   - **Smart Clutching & Về Home 2 pha an toàn:** Tự động chốt mỏ neo tọa độ mới chống nhảy vọt (Zero Teleport). Quy hoạch về Home 2 pha 500Hz URScript qua Secondary Port 30002 bo cung bán kính `blend = 0.03`m (30mm), tự động kết nối lại RTDE mượt mà.
 
 2. **Động Học Nghịch Siêu Tốc Thuần CPU (PyRoki + JAX/jaxls):**
    - **Giải bài toán IK ~1.0ms trên CPU:** Tối ưu hóa phi tuyến Levenberg-Marquardt bằng PyRoki, JAX JIT compile và `jaxls`, loại bỏ hoàn toàn nhu cầu trang bị GPU rời NVIDIA/CUDA.
@@ -20,7 +20,7 @@ Hệ thống điều khiển teleoperation thời gian thực và thu thập d�
 
 3. **Hệ Thống An Toàn Đa Lớp Thời Gian Thực 20Hz (Safety Gate & Phanh Mềm Chống Trip):**
    - **Rào chắn Descartes & Áo giáp tự va chạm 10mm:** Ràng buộc cao độ an toàn $Z \ge 0.020$m ($20$mm), góc vai $\le +0.20$ rad và áo giáp bảo vệ tự va chạm 10mm (hỗ trợ cờ `--disable-self-collision` để bypass khi cần).
-   - **SingularityGuard 2 ngưỡng:** Ngưỡng nguy hiểm $\sigma_{min\_danger} = 0.028$ chặn mục tiêu vi phạm và kích hoạt dừng an toàn; ngưỡng cảnh báo $\sigma_{min\_warn} = 0.042$ kích hoạt vùng giảm chấn mềm liên tục (Continuous Soft Damping, gia tốc khớp $a \le 0.048\text{ rad/s}^2$).
+   - **SingularityGuard 2 ngưỡng:** Ngưỡng nguy hiểm $\sigma_{danger} = 0.028$ chặn mục tiêu vi phạm và kích hoạt dừng an toàn; ngưỡng cảnh báo $\sigma_{warn} = 0.042$ kích hoạt vùng giảm chấn mềm liên tục (Continuous Soft Damping, gia tốc khớp $a \le 0.048$ rad/s²).
    - **Scaled Rate Limiter & Phanh mềm:** Tự động co giãn vận tốc 6 khớp ($\le 1.0$ rad/s) bảo toàn vector quỹ đạo trong không gian Descartes, triệt tiêu lệnh phanh gắt `servoStop()` chống Protective Stop cánh tay UR3e.
    - **Dây xích ảo chống văng (Anti-Windup Tether):** Giới hạn khoảng cách Descartes $D_{max} = 98$mm và leash xoay $0.45$ rad (tự siết về $0.15$ rad gần kỳ dị), triệt tiêu tích lũy trễ khi robot bị cản; tự phanh dừng an toàn nếu mất tín hiệu VR quá 1.0s.
 
@@ -63,7 +63,7 @@ Toàn bộ hệ thống điều khiển teleoperation và thu thập dữ liệu
      - *SACD & Anti-Windup Tether:* Lọc vi rung (Deadband 3mm / 1.5°) và rào chắn neo chống văng Tether 98mm (`D_MAX_TETHER = 0.098`m, leash xoay $0.45$ rad) khi chạm vật cản.
      - *PyRoki Kinematics Solver:* Giải động học nghịch siêu tốc ~1.0ms bằng JAX JIT CPU thuần, tối ưu chuyển vị xoay và giữ tính liên tục của góc khớp.
    - **Phân luồng 2 - Safety & Execution:**
-     - *Safety Gate & ABS Braking:* Giám sát SingularityGuard ($\sigma_{danger} = 0.028, \sigma_{warn} = 0.042$), giới hạn góc khớp và áo giáp bảo vệ mặt bàn 1cm, hãm phanh mềm ABS ($a \le 0.048\text{ rad/s}^2$).
+     - *Safety Gate & ABS Braking:* Giám sát SingularityGuard ($\sigma_{danger} = 0.028, \sigma_{warn} = 0.042$), giới hạn góc khớp và áo giáp bảo vệ mặt bàn 1cm, hãm phanh mềm ABS ($a \le 0.048$ rad/s²).
      - *Motion Rate & Connection Guard:* Vòng lặp định thời cứng 20Hz (50ms) bằng `perf_counter()`; tự động kích hoạt Fail-Safe khóa giữ vị trí an toàn khi mất sóng VR quá 1.0s.
      - *Dual-Channel Dispatcher:* Kênh chính UR RTDE (Port 30004) kèm kênh dự phòng Secondary Interface (Port 30002) chuyển mạch tự động dưới 1ms.
    - **Tầng đệm Lock-Free Action Buffer:** Bộ đệm đồng bộ phi khóa chuyển tiếp mượt mà chuỗi hành động 20Hz sang tầng dữ liệu mà không gây trễ chu kỳ điều khiển.
@@ -211,10 +211,10 @@ ur_ws/pyroki_ursim/
 | **ServoJ Proportional Gain** | `250` | Cấu hình qua biến môi trường `SERVO_GAIN` (mặc định 250), độ cứng vị trí tối ưu giúp cánh tay lướt êm không giật. |
 | **Vận tốc khớp tối đa (Rate Limiter)** | `1.0` rad/s ($\approx 57.3^\circ$/s) | Scaled Vector Limiter co giãn đồng bộ cả 6 khớp, bảo toàn 100% hướng vector Descartes. |
 | **Bán kính làm việc tối đa ($R_{max}$)** | `0.52` m | Khống chế phạm vi vươn phù hợp tầm với 500mm của UR3e. |
-| **Độ cao an toàn tối thiểu ($Z_{min}$)** | `0.020` m ($20\text{mm}$) | Chống cánh tay và ngàm kẹp va chạm mặt bàn ($Z \ge 20$mm). |
-| **Ngưỡng Singularity Warning & Danger** | $\sigma_{warn} = 0.042$, $\sigma_{danger} = 0.028$ | Continuous Soft Damping ($a \le 0.048\text{ rad/s}^2$) hãm mượt và chặn lệnh khi áp sát kỳ dị Jacobian. |
+| **Độ cao an toàn tối thiểu ($Z_{min}$)** | `0.020` m (20mm) | Chống cánh tay và ngàm kẹp va chạm mặt bàn ($Z \ge 20$mm). |
+| **Ngưỡng Singularity Warning & Danger** | $\sigma_{warn} = 0.042$, $\sigma_{danger} = 0.028$ | Continuous Soft Damping ($a \le 0.048$ rad/s²) hãm mượt và chặn lệnh khi áp sát kỳ dị Jacobian. |
 | **Dây xích ảo chống văng (Anti-Windup Tether)** | $D_{max} = 98$ mm, $\theta_{leash} = 0.45$ rad | Khống chế độ lệch Descartes và góc xoay mỏ neo, tự siết leash về $0.15$ rad khi gần điểm kỳ dị. |
-| **Dung sai vị trí IK (`pos_err`)** | $< 0.018$ m ($18\text{mm}$) | Đảm bảo tỷ lệ hội tụ IK vùng biên vươn xa đạt $>98\%$. |
+| **Dung sai vị trí IK (`pos_err`)** | $< 0.018$ m (18mm) | Đảm bảo tỷ lệ hội tụ IK vùng biên vươn xa đạt $> 98\%$. |
 | **Ngưỡng phát hiện vặn xoắn khớp** | `2.2` rad | Chặn các bước nhảy target đột ngột do đảo nhánh IK gần điểm kỳ dị. |
 | **Giới hạn khớp khuỷu (`elbow_joint`)** | `[-0.08, +3.00]` rad ($[-4.6^\circ, +171.8^\circ]$) | Cho phép duỗi thẳng tay mượt mà, chống cùi chỏ tự gập sát đâm vào thân robot. |
 | **Giới hạn khớp nâng vai (`shoulder_lift`)** | `[-2.65, +0.20]` rad ($[-151.8^\circ, +11.5^\circ]$) | Ngăn ngừa rủi ro đâm bắp tay xuống mặt bàn. |
